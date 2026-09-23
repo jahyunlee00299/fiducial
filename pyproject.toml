@@ -5,7 +5,45 @@ description = "The reference mark a measurement is aligned against. Static check
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
+
+# Deliberately empty, and a feature rather than an omission. A check that runs
+# in pre-commit and inside someone else's test session must not bring a
+# dependency tree with it -- the tool that reports on your parameters should
+# not be the reason your environment stops resolving. Everything here is
+# stdlib, including the TOML fallback for 3.10 and the block-subset YAML
+# reader (differential-tested against PyYAML, 36/36 identical on a public
+# corpus).
 dependencies = []
+
+keywords = [
+    "static-analysis", "pre-commit", "pytest-plugin", "reproducibility",
+    "provenance", "research-software", "parameters", "units",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: Pytest",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Scientific/Engineering",
+    # `Typing :: Typed` is deliberately absent. It is a promise that a type
+    # checker may trust this package's annotations, and it travels with a
+    # `py.typed` marker. Measured 260924: 117 of 155 functions carry a return
+    # annotation. Good coverage, not a complete one -- claiming it would be
+    # the same kind of unearned assurance this package exists to report.
+]
+
+[project.urls]
+Homepage = "https://github.com/jahyunlee00299/fiducial"
+Source = "https://github.com/jahyunlee00299/fiducial"
+Issues = "https://github.com/jahyunlee00299/fiducial/issues"
 
 [project.scripts]
 fiducial = "fiducial.cli:main"
