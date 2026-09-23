@@ -333,31 +333,59 @@ def from_names(verdicts: list[Any], mode: str = "set") -> list[Signal]:
     return out
 
 
-def from_coverage(gaps: list[Any]) -> list[Signal]:
+def from_coverage(
+    results: list[Any], baseline: frozenset[str] | set[str] | None = None
+) -> list[Signal]:
     """Rule (3). A missing test is not something a checker can write.
 
-    An agent *could* write one, and that is worth saying plainly in the
-    action text -- but it is not a mechanical edit, so no ``fix`` is emitted
-    and nothing here may be applied unattended.
+    ``results`` is every declared key, gated or not -- ``analyse`` reports the
+    whole spec -- so the gaps are selected here rather than assumed. Keys that
+    are asserted or pinned produce no signal at all: a finding for something
+    that is fine would make a consumer filter before it could count.
+
+    ``baseline`` carries the gaps a project already had. They stay in the
+    output, because an agent that cannot see them will propose closing a gap
+    twice, but they drop to ``needs_review`` and say so: a pre-existing gap is
+    a backlog item, and treating it as a fresh regression is how a ratchet
+    gets bypassed on its first real use.
+
+    No ``fix`` is emitted either way. An agent *can* write the missing test,
+    and the action text says so -- but that is authorship, not a mechanical
+    edit, and the two must not arrive through the same field.
     """
-    return [
-        Signal(
-            rule="coverage",
-            status="violation",
-            confidence="certain",
-            message=g.explain() if hasattr(g, "explain") else str(g),
-            key=getattr(g, "key", None),
-            action=(
-                "Write a test that asserts something about this parameter, or "
-                "remove it from the spec if it is no longer measured. Adding "
-                "the key to a test without an assertion does not close this."
-            ),
+    known = set(baseline or ())
+    out: list[Signal] = []
+    for r in results:
+        if not r.is_gap:
+            continue
+        pre_existing = r.key in known
+        out.append(
+            Signal(
+                rule="coverage",
+                status="violation",
+                confidence="needs_review" if pre_existing else "certain",
+                message=r.explain(),
+                key=r.key,
+                action=(
+                    "Recorded in the baseline already, so it is not a new "
+                    "regression. Close it when the parameter is next touched "
+                    "rather than as an unrelated edit."
+                    if pre_existing
+                    else "Write a test that asserts something about this "
+                    "parameter, or remove it from the spec if it is no longer "
+                    "measured. Mentioning the key in a test without asserting "
+                    "on it does not close this."
+                ),
+            )
         )
-        for g in gaps
-    ]
+    return out
 
 
-def from_docs(findings: list[Any], gaps: list[Any] | None = None) -> list[Signal]:
+def from_docs(
+    findings: list[Any],
+    gaps: list[Any] | None = None,
+    errors: list[tuple[Any, str]] | None = None,
+) -> list[Signal]:
     """Rule (4). The upstream value is known, so the repair is determined.
 
     A derived document declares which upstream it repeats and what it repeats
@@ -368,6 +396,10 @@ def from_docs(findings: list[Any], gaps: list[Any] | None = None) -> list[Signal
     A ``SourceGap`` is different: a label missing from one side means the
     comparison never happened, which is ``cannot_check`` rather than a clean
     pass.
+
+    ``errors`` are documents whose declaration would not parse. Their author
+    believes they are gated and they are not, so they are the loudest
+    ``cannot_check`` of the three -- never folded into a clean count.
     """
     out: list[Signal] = []
     for f in findings:
@@ -403,6 +435,22 @@ def from_docs(findings: list[Any], gaps: list[Any] | None = None) -> list[Signal
                 path=_rel(getattr(g, "path", "")),
                 key=getattr(g, "label", None),
                 action=ACTION["configure"],
+            )
+        )
+    for path, reason in errors or []:
+        out.append(
+            Signal(
+                rule="docs",
+                status="cannot_check",
+                confidence="certain",
+                message=f"{path}: declaration could not be read -- {reason}",
+                path=_rel(path),
+                action=(
+                    "This document declares an SSOT that could not be parsed, "
+                    "so it was NOT checked while its author believes it is "
+                    "gated. Fix the declaration before trusting any number in "
+                    "it."
+                ),
             )
         )
     return out
@@ -452,3 +500,36 @@ class Envelope:
 
     def to_json(self, indent: int | None = 2) -> str:
         return json.dumps(self.as_dict(), indent=indent, ensure_ascii=False)
+
+
+def from_units(mismatches: list[Any]) -> list[Signal]:
+    """Rule (4), unit axis. Certain, and not mechanically repairable.
+
+    A unit mismatch is only reachable when the numbers already agree, so it is
+    the one finding that survives every other check passing -- which is why it
+    is reported separately rather than folded into the value comparison.
+
+    No ``fix``: the tool knows the two documents disagree about the unit, not
+    which one is right. Repairing it means either changing the number to suit
+    the unit or the unit to suit the number, and those are different claims
+    about the world. Guessing between them is exactly the substitution this
+    package refuses.
+    """
+    return [
+        Signal(
+            rule="docs",
+            status="violation",
+            confidence="certain",
+            message=m.explain(),
+            path=_rel(m.path),
+            line=m.line_no,
+            key=m.label,
+            action=(
+                "Decide which side is right before changing either. The "
+                "numbers agree, so one document has the wrong unit and the "
+                "other has the wrong magnitude -- correcting the unit alone "
+                "may leave the value wrong by that factor."
+            ),
+        )
+        for m in mismatches
+    ]

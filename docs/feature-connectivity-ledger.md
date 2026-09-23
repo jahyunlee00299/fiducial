@@ -77,8 +77,9 @@
 - **Deferred risk**:
   - `_NEUTRAL_DEFAULTS = {0.0, 1.0}` is a heuristic. A genuine measurement that
     happens to equal 1.0 is hidden unless `--include-neutral` is passed.
-  - `params["eta"] = 0.87` (subscript assignment) is **not** detected —
-    `visit_Subscript` is a stub. Known gap.
+  - ~~`params["eta"] = 0.87` (subscript assignment) is **not** detected —
+    `visit_Subscript` is a stub. Known gap.~~ Closed 260924, see "Foreign
+    repositories" below. The stub's own comment claimed the shape was handled.
   - No cross-file provenance: a literal next to a comment citing its source is
     still flagged. The rule asks "is there a number here", not "is there a
     citation anywhere in reach", despite what the message implies.
@@ -953,3 +954,179 @@ The `check` trap held again -- `_pointers_args` needed `format="text"` or
 was recorded as one rather than built. The other four rules still emit prose
 only; their adapters exist in `signals.py` and are unwired until each is
 proven the same way.
+
+### The other four rules, wired (260924)
+
+`--format=json` now reaches every rule, not just the one it was built on. The
+adapters existed in `signals.py` from the start; being reachable from no
+subcommand is the written-but-unwired shape this repo keeps catching, so each
+is now asserted through the CLI rather than assumed from the module.
+
+**Running them found three defects in adapters that had never executed.**
+
+```
+from_coverage   `analyse` returns EVERY declared key, gated or not. The
+                adapter emitted a finding per key, so a consumer would have
+                had to filter before it could count. Now selects on `is_gap`,
+                and takes the baseline: a pre-existing gap drops to
+                `needs_review` rather than reading as a fresh regression --
+                which is how a ratchet gets bypassed on its first real use.
+from_docs       `docs.scan` returns a 4-tuple, not 2. The fourth is `errors`
+                -- documents whose declaration would not parse -- and the
+                adapter dropped them. Those are the loudest `cannot_check`
+                there is: the author believes the document is gated and it is
+                not. Now emitted, and `docs --format=json` exits 2 on one.
+KeyCoverage     the adapter guarded `explain()` behind `hasattr` and would
+                have fallen back to `str(g)`. The method exists; the guard was
+                written blind and removed.
+```
+
+None of these would have been visible without running the adapters against
+real objects, which is the whole reason the wiring gate requires it.
+
+**What differs per rule, and why.** The fix field is not uniform because what
+the rules can know is not:
+
+```
+1 literals   no fix   -- knows the number lacks provenance, not what it was
+2 names      unsafe   -- two repairs resolve it; only the author knows which
+3 coverage   no fix   -- writing the test is authorship, not an edit
+4 docs       safe     -- the declaration names its upstream, so the value is known
+5 pointers   varies   -- by candidate count
+```
+
+Rules ① and ③ emitting no fix is the deliberate half. An agent *can* write the
+test or track down the source, and the `action` says so — but authorship must
+not arrive through the same field as a mechanical edit.
+
+**The `check` trap fired again, and caught one.** Four of five Namespaces took
+`format="text"` from a scripted edit; `_coverage_args` has a different shape
+and was silently skipped, which `check` would have hit as a missing attribute.
+Found by counting the five rather than trusting the script's report.
+
+### Unit mismatch: the parked module, wired (260924)
+
+A module sat on `design/parameter-registry-260923`, complete and imported by
+nothing, with a commit message naming two design questions it presumed answers
+to. One of those questions is now answered and the module is in: **a unit
+disagreement is a violation.**
+
+**The defect, reproduced before it was fixed.** Rule (4) compared two readings
+of one quantity as `float` against `float`:
+
+```
+SSOT.md      | reaction time | 48 h |
+DERIVED.md     reaction time 48 min.
+
+$ fiducial docs --root .       # exit 0, 0 violations   <- measured
+```
+
+A factor of sixty, reported as agreement. Changing 48 to 36 was caught;
+changing `h` to `min` was not, because the unit was matched by the value
+pattern and thrown away.
+
+**Why it is a separate finding.** The check is only reachable when the numbers
+already AGREE, which makes it the one finding that survives every other check
+passing. Folding it into the value comparison would hide it behind the check
+that just succeeded. So `check()` returns a third list, the CLI prints it in
+its own right, and the count line names it — a reader who sees "0 violations"
+above a printed unit error believes the count.
+
+**No fix, deliberately.** The tool knows the two documents disagree about the
+unit, not which one is right. Repairing means either changing the number to
+suit the unit or the unit to suit the number, and those are different claims
+about the world. The action text says exactly that.
+
+**Refutation: the false positives it must not produce.** Seven cases, and the
+narrowness is pinned as hard as the detection:
+
+```
+48 hr   vs 48 h      clean   -- one unit, two spellings; folding is the point
+48시간   vs 48 h      clean   -- one unit, two languages
+48      vs 48 h      clean   -- a bare number makes no claim about units
+48 h    vs 48        clean   -- nothing upstream to compare against
+36 h    vs 48 h      clean   -- that is the value rule's finding, not this one
+```
+
+**Design question left open, by decision.** Significant-figure loss (`74.09`
+against `74.09268`) is implemented in the same module and stays unwired. The
+parked commit was right that it is a separate question: precision that agrees
+to the figures printed is not a defect, and the case for reporting it rests on
+arithmetic downstream that this rule cannot see.
+
+**Contract change.** `docs.check` returns 3 values and `docs.scan` returns 5.
+`tests/test_docs.py` drops the new one through its helper on purpose — every
+case in that file constructs disagreeing values, where a unit mismatch is
+unreachable by construction.
+
+The branch is merged and deleted; `docs/` and `scripts/` artefacts that came
+with it stay out of the public tree.
+
+---
+
+## Foreign repositories: config anchor, containers, key families (260924)
+
+Scope: make rules (1) and (2) usable on a research repository that did not
+write itself for this package. Layer: core (config discovery), sub-feature
+(rule 1 matching). Driven by running fiducial on three public repositories
+(Bioindustrial-Park, Benchmark-Models-PEtab, edbo) and on the upstream fix
+commits that corrected a hard-coded value.
+
+### Implement
+
+```
+fiducial/cli.py        _load_config anchors discovery at the scanned paths;
+                       --call-keywords flag
+fiducial/config.py     literals_call_keywords
+fiducial/literals.py   KeyMatcher (exact + case-insensitive glob);
+                       subscript target, dict literal, dict(...), signature
+                       defaults; call keywords opt-in
+README.md              "Why these, and not more" -- families and containers
+tests/test_config_anchor.py     7
+tests/test_literals_foreign.py  12 functions / 30 cases
+tests/EXPECTED_TESTS   executed 208 -> 245, defined 176 -> 195
+```
+
+### Prove
+
+- Config: `fiducial names Benchmark-Models-PEtab` from inside this checkout
+  exited 0 before (our own allow-zero-comparable leaked in) and 2 after --
+  the same as from a neutral directory.
+- Ground truth: Bioindustrial-Park 6001ed0ef5, where the author corrected
+  `k_ref.setdefault('k_17', 44.0)` to the live 0.1077 g/L/h (400x stale). On
+  the pre-fix file (75 KB): `--keys kcat,k_cat` 0 findings; `--keys 'k_*'`
+  exactly 1, that line.
+- Old vs new on each new container: 0 -> 1 for all five shapes.
+
+### Refute
+
+- Reverting cli.py: 5 of 7 anchor tests fail.
+- **Call keywords by default were wrong.** Reference codebase, keys
+  `eta,kla_scale`: 43 -> 217 findings, 48+ of them pymoo `SBX(eta=15)` /
+  `PM(eta=20)`. Made opt-in; `dict(...)` stays on. One test row that encoded
+  the old default (`run(model, eta=0.87)` caught) was moved into an explicit
+  opt-in test, not deleted.
+- After that: 43 -> 161, 0 of the 43 lost. Sample of 14 added: 8 fitted
+  values copied into scripts as dict entries (incl. `"kla_scale": 0.776`,
+  the README's own example, previously missed because it sat in a dict),
+  3 test fixtures, 3 what-if scenario values.
+- Bioindustrial-Park, same keys as the first run: 47 -> 127; a 15-line sample
+  was all price/titer literals in stream or unit construction.
+
+### Regress
+
+Full suite 249 executed (lean floor 245), 2 skipped (reference corpus).
+
+### Deferred risk
+
+- Precision on foreign code is roughly half by the one sample above. Paths
+  (`tests/`, archives) do most of the filtering; that is the caller's call.
+- Broad patterns are noisy: `k_*,*_price,*titer*,*yield*` on
+  Bioindustrial-Park gave 519. A pattern is a declaration, so the caller owns
+  its breadth; a `keys` discovery helper was not built.
+- The same key bound to different literals across files (`titer` 2.003 vs
+  1.208; `eta` 0.535 / 0.6187 / 0.6252 / 0.445 in one codebase) is the shape of the
+  k_17 bug (44 in one place, 0.1077 in another) and is not reported as such.
+  A cross-file conflict view is the obvious next unit.
+- Rule (5) still reads `.json` indexes only; PEtab problem YAMLs (35 models)
+  are out of reach.

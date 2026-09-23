@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import re
 from . import locales as _locales
+from . import quantities as _quantities
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -493,8 +494,14 @@ def check(
     decl: Declaration,
     rel_tol: float = 0.0,
     locale: "_locales.LocaleSet | None" = None,
-) -> tuple[list[Finding], list[SourceGap]]:
-    """Compare one document's repeated quantities against its declared source."""
+) -> tuple[list[Finding], list[SourceGap], list[_quantities.UnitMismatch]]:
+    """Compare one document's repeated quantities against its declared source.
+
+    Returns ``(findings, gaps, units)``. A unit mismatch is separate from a
+    value mismatch because it is found under the opposite condition: the
+    numbers have to AGREE for it to matter, so folding the two together
+    would hide it behind the check that just passed.
+    """
     if not decl.source.is_file():
         raise DeclarationError(f"declared source does not exist: {decl.source}")
 
@@ -507,6 +514,7 @@ def check(
 
     findings: list[Finding] = []
     gaps: list[SourceGap] = []
+    units: list[_quantities.UnitMismatch] = []
 
     for label, declared in decl.repeats.items():
         # Two documents rarely use one word for one quantity: the reference
@@ -514,11 +522,12 @@ def check(
         # `목표 생산량` downstream. A declaration may therefore give the
         # upstream label after `as`, e.g. `목표 생산량 as 생산 규모: 2000`.
         label, _, src_label = (x.strip() for x in _split_alias(label))
-        src_hits = [
-            v
+        src_pairs = [
+            (v, line)
             for _, v, line in find_values(src_text, src_label, locale)
             if is_assertion(line, locale)
         ]
+        src_hits = [v for v, _ in src_pairs]
         if not src_hits:
             gaps.append(
                 SourceGap(
@@ -545,6 +554,14 @@ def check(
 
         for line_no, value, line in doc_hits:
             if any(_agrees(value, s, rel_tol) for s in src_hits):
+                # The numbers match. That is exactly when a unit error is
+                # invisible: 48 h and 48 min agree on every axis this rule
+                # checked before, and differ by a factor of 60.
+                mismatch = _unit_disagreement(
+                    decl, label, value, line_no, line, src_pairs, rel_tol
+                )
+                if mismatch is not None:
+                    units.append(mismatch)
                 continue
             findings.append(
                 Finding(
@@ -559,7 +576,7 @@ def check(
                 )
             )
 
-    return findings, gaps
+    return findings, gaps, units
 
 
 def _agrees(a: float, b: float, rel_tol: float) -> bool:
@@ -577,7 +594,10 @@ def scan(
     root: Path | None = None,
     rel_tol: float = 0.0,
     locale: "_locales.LocaleSet | None" = None,
-) -> tuple[list[Finding], list[SourceGap], list[Path], list[tuple[Path, str]]]:
+) -> tuple[
+    list[Finding], list[SourceGap], list[Path],
+    list[tuple[Path, str]], list[_quantities.UnitMismatch],
+]:
     """Check every declared document in ``paths``.
 
     Returns ``(findings, gaps, declared_paths, errors)``.  ``declared_paths`` is
@@ -586,6 +606,7 @@ def scan(
     """
     findings: list[Finding] = []
     gaps: list[SourceGap] = []
+    units: list[_quantities.UnitMismatch] = []
     declared: list[Path] = []
     errors: list[tuple[Path, str]] = []
 
@@ -599,11 +620,94 @@ def scan(
             continue
         declared.append(p)
         try:
-            f, g = check(decl, rel_tol=rel_tol, locale=locale)
+            f, g, u = check(decl, rel_tol=rel_tol, locale=locale)
         except DeclarationError as exc:
             errors.append((p, str(exc)))
             continue
         findings.extend(f)
         gaps.extend(g)
+        units.extend(u)
 
-    return findings, gaps, declared, errors
+    return findings, gaps, declared, errors, units
+
+
+def _unit_disagreement(
+    decl: Declaration,
+    label: str,
+    value: float,
+    line_no: int,
+    line: str,
+    src_pairs: list[tuple[float, str]],
+    rel_tol: float,
+) -> "_quantities.UnitMismatch | None":
+    """The unit written here, against the unit the upstream writes.
+
+    Only reached when the NUMBERS already agree, which is the whole point: a
+    quantity that matches in magnitude and differs in unit passes every other
+    check this rule makes. Measured before this existed::
+
+        SSOT.md    | reaction time | 48 h |
+        DERIVED.md   reaction time 48 min.
+
+        $ fiducial docs --root .        # exit 0, 0 violations
+
+    A factor of sixty, reported as agreement.
+
+    Deliberately narrow. Nothing here knows which unit is *correct* and
+    nothing converts between them; it compares what the upstream wrote with
+    what this document wrote, the same declared-versus-written comparison the
+    rule already makes for the number. Where either side writes no unit at
+    all there is nothing to compare, and silence is not a finding -- a
+    document that states a bare number is making no claim about units.
+    """
+    found_unit = _unit_of(line, value)
+    if found_unit is None:
+        return None
+
+    # The upstream reading whose number this one matched is the one whose unit
+    # it has to match; a different quantity's unit proves nothing.
+    for src_value, src_line in src_pairs:
+        if not _agrees(value, src_value, rel_tol):
+            continue
+        declared_unit = _unit_of(src_line, src_value)
+        if declared_unit is None:
+            continue
+        if _quantities.normalise_unit(declared_unit) == _quantities.normalise_unit(
+            found_unit
+        ):
+            return None
+        return _quantities.UnitMismatch(
+            path=decl.path,
+            source=decl.source,
+            label=label,
+            declared_unit=declared_unit,
+            found_unit=found_unit,
+            line_no=line_no,
+            line=line.strip(),
+        )
+    return None
+
+
+def _unit_of(line: str, value: float) -> str | None:
+    """The unit written after ``value`` in ``line``, or None.
+
+    `unit_after` takes a character offset; the comparison above has a number.
+    Finding where that number is written is this function's whole job, and it
+    is separate because "which token on this line IS the value" has more than
+    one right answer: `48` appears inside `1.48` and inside `480`. The scan
+    walks numeric runs and compares parsed values, so a substring never
+    matches by accident.
+    """
+    import re as _re
+
+    for m in _re.finditer(r"-?\d+(?:[.,]\d+)?", line):
+        text = m.group(0).replace(",", ".")
+        try:
+            if float(text) != value:
+                continue
+        except ValueError:
+            continue
+        unit = _quantities.unit_after(line, m.end())
+        if unit is not None:
+            return unit
+    return None

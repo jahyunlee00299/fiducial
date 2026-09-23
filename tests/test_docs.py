@@ -41,9 +41,18 @@ def _front(repeats: str = "    pH: 10\n") -> str:
 
 
 def _run(doc: Path) -> tuple[list[D.Finding], list[D.SourceGap]]:
+    """The value comparison, which is what every test in this file examines.
+
+    `check` also returns unit mismatches, a third axis added 260924. They are
+    dropped here on purpose: a unit mismatch is only reachable when the values
+    AGREE, so it can never appear in a case this file constructs, and folding
+    it into these assertions would blur two findings that need different
+    repairs. `tests/test_units.py` owns that axis.
+    """
     decl = D.read_declaration(doc)
     assert decl is not None, "fixture should declare an SSOT"
-    return D.check(decl)
+    findings, gaps, _units = D.check(decl)
+    return findings, gaps
 
 
 # --------------------------------------------------------------------------
@@ -332,7 +341,7 @@ def test_tolerance_is_exact_by_default(tmp_path):
 def test_tolerance_can_be_relaxed(tmp_path):
     doc = _corpus(tmp_path, _front("    residence_h: 36\n") + "residence_h 35.9 이다.\n")
     decl = D.read_declaration(doc)
-    findings, _ = D.check(decl, rel_tol=0.01)
+    findings, _gaps, _units = D.check(decl, rel_tol=0.01)
     assert findings == []
 
 

@@ -294,6 +294,7 @@ class Config:
     # rule (1)
     keys: tuple[str, ...] = ()
     include_neutral: bool = False
+    literals_call_keywords: bool = False
     neutral_defaults: tuple[float, ...] | None = None
     literals_paths: tuple[str, ...] = ()
 
@@ -358,7 +359,7 @@ _SET_FIELDS = {
     "file_keys", "extend_file_keys",
     "id_keys", "extend_id_keys",
 }
-_BOOL_FIELDS = {"include_neutral", "strict_gaps", "names_allow_zero_comparable"}
+_BOOL_FIELDS = {"include_neutral", "literals_call_keywords", "strict_gaps", "names_allow_zero_comparable"}
 _FLOAT_FIELDS = {"tol"}
 _STR_FIELDS = {
     "names_mode", "spec", "spec_field", "waiver_field", "coverage_level",

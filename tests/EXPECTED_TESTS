@@ -10,5 +10,5 @@
 # Setting it to the richer number instead would fail every CI run
 # and every fresh clone, which is how it was first set (measured
 # 260923: floor 202, CI ran 196, exit 1).
-executed = 208
-defined  = 176
+executed = 221
+defined  = 189

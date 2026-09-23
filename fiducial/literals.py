@@ -42,6 +42,7 @@ inversion is the contribution; the AST walk is not novel and a ``semgrep``
 from __future__ import annotations
 
 import ast
+import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -67,6 +68,45 @@ _UNREMARKABLE = {0, 1, -1, 2, 100}
 #: them, because "the term was off and nobody noticed" is a real failure mode --
 #: just a different one, and one the caller should opt into looking for.
 _NEUTRAL_DEFAULTS = {0.0, 1.0}
+
+
+#: Characters that make a declared key a pattern rather than a name.
+_GLOB = set("*?[")
+
+
+class KeyMatcher:
+    """Declared keys: exact names, plus glob patterns for families of names.
+
+    Why patterns. A foreign project names one quantity in many ways --
+    ``k_17``, ``k_cat_f``, ``kcat_r6``, ``Titer_gL`` -- and the exact-name form
+    only catches the spelling the caller already knew. Measured 260923 on
+    Bioindustrial-Park commit 6001ed0ef5: the author corrected
+    ``k_ref.setdefault('k_17', 44.0)`` to the live 0.1077 (a 400x stale
+    default). That line is this rule's target shape, but ``--keys`` had to
+    name ``k_17`` in advance to see it; ``k_*`` finds it without knowing.
+
+    A pattern is still a DECLARATION, not a guess: the caller says which
+    family is measured, the checker does not infer it. Exact names match
+    exactly (unchanged); patterns match case-insensitively, because a family
+    declared as ``*titer*`` that misses ``Titer`` is the silent miss this
+    package exists to name.
+    """
+
+    def __init__(self, keys: Iterable[str]):
+        keys = [k for k in keys if k]
+        self.exact = frozenset(k for k in keys if not _GLOB & set(k))
+        self.patterns = tuple(k.lower() for k in keys if _GLOB & set(k))
+
+    def __bool__(self) -> bool:
+        return bool(self.exact or self.patterns)
+
+    def __call__(self, name: str | None) -> bool:
+        if not name:
+            return False
+        if name in self.exact:
+            return True
+        low = name.lower()
+        return any(fnmatch.fnmatchcase(low, p) for p in self.patterns)
 
 
 @dataclass(frozen=True)
@@ -113,15 +153,27 @@ def _const_str(node: ast.AST) -> str | None:
     return None
 
 
+def _target_name(t: ast.AST) -> str | None:
+    """`eta` / `obj.eta` / `params["eta"]` -> "eta"."""
+    if isinstance(t, ast.Name):
+        return t.id
+    if isinstance(t, ast.Attribute):
+        return t.attr
+    if isinstance(t, ast.Subscript):
+        return _const_str(t.slice)
+    return None
+
+
 class _Visitor(ast.NodeVisitor):
     """Walks one module, collecting both shapes for the declared keys."""
 
     def __init__(
         self,
         path: Path,
-        keys: frozenset[str],
+        keys: "KeyMatcher",
         source_lines: Sequence[str],
         neutral_defaults: frozenset[float] = frozenset(_NEUTRAL_DEFAULTS),
+        call_keywords: bool = False,
     ):
         self.path = path
         self.keys = keys
@@ -131,6 +183,7 @@ class _Visitor(ast.NodeVisitor):
         #: element is something else (a log-space model where it is 1.0, a
         #: ratio centred on 100) sets its own in [tool.fiducial].
         self.neutral_defaults = neutral_defaults
+        self.call_keywords = call_keywords
         self.found: list[Finding] = []
 
     def _snippet(self, lineno: int) -> str:
@@ -161,11 +214,12 @@ class _Visitor(ast.NodeVisitor):
         ):
             key = _const_str(node.args[0])
             default = _literal(node.args[1])
-            if key in self.keys and default is not None:
+            if self.keys(key) and default is not None:
                 self._record(
                     node, key, "silent_fallback",
                     neutral=default in self.neutral_defaults,
                 )
+        self._keywords(node)
         self.generic_visit(node)
 
     # eta = 1.0   /   self.eta = 1.0   /   eta: float = 1.0
@@ -188,17 +242,72 @@ class _Visitor(ast.NodeVisitor):
         if val is None or val in _UNREMARKABLE:
             return
         for t in targets:
-            name = (
-                t.id if isinstance(t, ast.Name)
-                else t.attr if isinstance(t, ast.Attribute)
-                else None
-            )
-            if name in self.keys:
+            name = _target_name(t)
+            if self.keys(name):
                 self._record(node, name, "bare_literal")
 
-    # params["eta"] = 1.0 is an assignment through a subscript; treat the
-    # subscript key as the name.
-    def visit_Subscript(self, node: ast.Subscript) -> None:
+    # --- shapes a foreign project stores parameters in -------------------
+    # The rule began on one codebase whose parameters are module names and
+    # attributes. Other projects keep the same number in a dict, pass it as
+    # a keyword, or default it in a signature. Each is the same claim -- a
+    # measured key bound to a literal -- in a different container.
+    #
+    # Note: a `visit_Subscript` stub used to sit here with a comment saying
+    # `params["eta"] = 1.0` was handled. It was a no-op; the shape was never
+    # caught. The subscript form now goes through `_target_name`.
+
+    def visit_Dict(self, node: ast.Dict) -> None:
+        # {"eta": 0.87}
+        for k, v in zip(node.keys, node.values):
+            name = _const_str(k) if k is not None else None
+            val = _literal(v)
+            if self.keys(name) and val is not None and val not in _UNREMARKABLE:
+                self._record(v, name, "bare_literal")
+        self.generic_visit(node)
+
+    def _keywords(self, node: ast.Call) -> None:
+        # dict(eta=0.87) always; run(eta=0.87) only when asked.
+        #
+        # A keyword argument names a parameter of the CALLEE, not of this
+        # project. Measured 260923 on the reference codebase with keys
+        # eta,kla_scale: reading every call's keywords took the run from 43
+        # findings to 217, and 48+ of the new ones were pymoo's
+        # `SBX(prob=0.9, eta=15)` / `PM(eta=20)` -- a crossover distribution
+        # index that shares a name with the effectiveness factor and nothing
+        # else. `dict(...)` builds the project's own mapping, so its keys are
+        # the project's names. Other callees are opt-in (`call_keywords`) for
+        # a codebase whose constructors take measured values directly, such
+        # as Bioindustrial-Park's `Stream(..., price=0.73)`.
+        is_dict = isinstance(node.func, ast.Name) and node.func.id == "dict"
+        if not (is_dict or self.call_keywords):
+            return
+        for kw in node.keywords:
+            val = _literal(kw.value)
+            if self.keys(kw.arg) and val is not None and val not in _UNREMARKABLE:
+                self._record(kw.value, kw.arg, "bare_literal")
+
+    def _defaults(self, node) -> None:
+        # def f(eta=0.87): -- a signature default is the same silent
+        # fallback as params.get("eta", 0.87): omit the argument and the run
+        # proceeds on a number nobody measured.
+        a = node.args
+        positional = a.posonlyargs + a.args
+        pairs = list(zip(positional[len(positional) - len(a.defaults):], a.defaults))
+        pairs += [(arg, d) for arg, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+        for arg, default in pairs:
+            val = _literal(default)
+            if self.keys(arg.arg) and val is not None:
+                self._record(
+                    default, arg.arg, "silent_fallback",
+                    neutral=val in self.neutral_defaults,
+                )
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._defaults(node)
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._defaults(node)
         self.generic_visit(node)
 
 
@@ -208,6 +317,7 @@ def scan_source(
     keys: Iterable[str],
     include_neutral: bool = False,
     neutral_defaults: Iterable[float] | None = None,
+    call_keywords: bool = False,
 ) -> list[Finding]:
     """Findings for ``source``.
 
@@ -215,7 +325,7 @@ def scan_source(
     family.  They are excluded by default because they outnumber the real hits
     roughly 4:1 on the reference codebase and drown them.
     """
-    keyset = frozenset(keys)
+    keyset = KeyMatcher(keys)
     if not keyset:
         raise ValueError(
             "no declared keys: every check would pass vacuously. "
@@ -227,7 +337,7 @@ def scan_source(
         if neutral_defaults is None
         else frozenset(float(x) for x in neutral_defaults)
     )
-    v = _Visitor(path, keyset, source.splitlines(), neutral)
+    v = _Visitor(path, keyset, source.splitlines(), neutral, call_keywords)
     v.visit(tree)
     found = v.found if include_neutral else [f for f in v.found if not f.neutral]
     return sorted(found, key=lambda f: (f.line, f.col))
@@ -238,6 +348,7 @@ def scan_file(
     keys: Iterable[str],
     include_neutral: bool = False,
     neutral_defaults: Iterable[float] | None = None,
+    call_keywords: bool = False,
 ) -> list[Finding]:
     return scan_source(
         path,
@@ -245,4 +356,5 @@ def scan_file(
         keys,
         include_neutral=include_neutral,
         neutral_defaults=neutral_defaults,
+        call_keywords=call_keywords,
     )

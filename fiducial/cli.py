@@ -92,7 +92,46 @@ def _load_config(args: argparse.Namespace) -> _config.Config:
     themselves exist to remove.
     """
     explicit = getattr(args, "config", None)
-    return _config.load(Path(explicit) if explicit else None)
+    if explicit:
+        return _config.load(Path(explicit))
+
+    # Discover from what is being SCANNED, not from where the command runs.
+    # Measured 260923: `fiducial names <foreign repo>` run from inside this
+    # package's own checkout picked up our `names_allow_zero_comparable =
+    # true` and exited 0 on a foreign tree where the rule compared nothing;
+    # the same command from a neutral directory exited 2. The verdict on a
+    # tree must not depend on the caller's cwd.
+    paths = list(getattr(args, "paths", None) or [])
+    if not paths:
+        return _config.load(None)
+    found = {_config.find_config(_scan_anchor(p)) for p in paths}
+    if len(found) > 1:
+        names = sorted(str(f) if f else "<none>" for f in found)
+        print(
+            "fiducial: the scanned paths belong to different configs "
+            f"({', '.join(names)}), so no single set of settings applies. "
+            "Scan them separately, or pass --config.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CANNOT_CHECK)
+    (path,) = found
+    return _config.Config() if path is None else _config.load(path)
+
+
+def _scan_anchor(pattern: str) -> Path:
+    """The existing directory a path, directory or glob is rooted in."""
+    p = Path(pattern)
+    fixed = []
+    for part in p.parts:
+        if any(c in part for c in "*?["):
+            break
+        fixed.append(part)
+    base = Path(*fixed) if fixed else Path(".")
+    if base.is_file():
+        base = base.parent
+    while not base.is_dir() and base != base.parent:
+        base = base.parent
+    return base.resolve()
 
 
 def _locale_for(cfg: _config.Config) -> "_locales.LocaleSet":
@@ -142,6 +181,10 @@ def _run_literals(args: argparse.Namespace, cfg: _config.Config | None = None) -
                     keys,
                     include_neutral=args.include_neutral or cfg.include_neutral,
                     neutral_defaults=cfg.neutral_defaults,
+                    call_keywords=(
+                        getattr(args, "call_keywords", False)
+                        or cfg.literals_call_keywords
+                    ),
                 )
             )
         except SyntaxError as exc:
@@ -161,6 +204,14 @@ def _run_literals(args: argparse.Namespace, cfg: _config.Config | None = None) -
             file=sys.stderr,
         )
         return EXIT_CANNOT_CHECK
+
+    if getattr(args, "format", "text") == "json":
+        env = _signals.Envelope(_signals.from_literals(findings))
+        print(env.to_json())
+        s = env.summary()
+        if s["violations"] == 0 and s["cannot_check"]:
+            return EXIT_CANNOT_CHECK
+        return EXIT_VIOLATIONS if s["violations"] else EXIT_OK
 
     for find in findings:
         print(find.explain())
@@ -210,6 +261,14 @@ def _run_names(args: argparse.Namespace, cfg: _config.Config | None = None) -> i
     args_allow = getattr(args, "allow_zero_comparable", False)
 
     verdicts = _names.scan(files, mode, prose, reference, selfdecl)
+    if getattr(args, "format", "text") == "json":
+        env = _signals.Envelope(_signals.from_names(verdicts, mode))
+        print(env.to_json())
+        s = env.summary()
+        if s["violations"] == 0 and s["cannot_check"]:
+            return EXIT_CANNOT_CHECK
+        return EXIT_VIOLATIONS if s["violations"] else EXIT_OK
+
     for v in verdicts:
         print(v.explain(mode))
 
@@ -344,6 +403,15 @@ def _run_coverage(args: argparse.Namespace, cfg: _config.Config | None = None) -
     if waived:
         reported = [r for r in reported if r.key not in waived]
 
+    if getattr(args, "format", "text") == "json":
+        env = _signals.Envelope(_signals.from_coverage(reported, baseline))
+        print(env.to_json())
+        s = env.summary()
+        if s["violations"] == 0 and s["cannot_check"]:
+            return EXIT_CANNOT_CHECK
+        return EXIT_VIOLATIONS if s["violations"] else EXIT_OK
+
+
     if args.write_baseline:
         bp = Path(baseline_name)
         header = (
@@ -405,12 +473,28 @@ def _run_docs(args: argparse.Namespace, cfg: _config.Config | None = None) -> in
     root_name = _pick(getattr(args, "root", None), cfg.docs_root)
     root = Path(root_name) if root_name else None
     tol = args.tol if args.tol else cfg.tol
-    findings, gaps, declared, errors = _docs.scan(
+    findings, gaps, declared, errors, units = _docs.scan(
         files, root=root, rel_tol=tol, locale=_locale_for(cfg)
     )
 
+    if getattr(args, "format", "text") == "json":
+        env = _signals.Envelope(
+            _signals.from_docs(findings, gaps, errors)
+            + _signals.from_units(units)
+        )
+        print(env.to_json())
+        s = env.summary()
+        if s["violations"] == 0 and s["cannot_check"]:
+            return EXIT_CANNOT_CHECK
+        return EXIT_VIOLATIONS if s["violations"] else EXIT_OK
+
     for f in findings:
         print(f.explain())
+    # A unit mismatch is only reachable when the NUMBERS agree, so it
+    # never appears in the list above -- it has to be printed in its
+    # own right or the 60x error stays invisible.
+    for u in units:
+        print(u.explain())
     # Gaps are printed by default. A declared quantity that is compared against
     # nothing produces the same "0 violations" line as one that agrees, and the
     # difference is the whole question this rule answers.
@@ -440,8 +524,13 @@ def _run_docs(args: argparse.Namespace, cfg: _config.Config | None = None) -> in
         )
         return EXIT_CANNOT_CHECK
 
+    # Unit mismatches are counted here, not alongside `findings`, because a
+    # reader who sees "0 violations" above a printed unit error will trust the
+    # count over the text. They are named separately so the two kinds stay
+    # distinguishable: a wrong number and a wrong unit are different repairs.
+    unit_note = f", {len(units)} unit mismatch(es)" if units else ""
     print(
-        f"\nfiducial docs: {len(findings)} violation(s) across "
+        f"\nfiducial docs: {len(findings)} violation(s){unit_note} across "
         f"{len(declared)} declared document(s) ({len(files)} scanned)."
     )
     if gaps:
@@ -460,7 +549,7 @@ def _run_docs(args: argparse.Namespace, cfg: _config.Config | None = None) -> in
             file=sys.stderr,
         )
         return EXIT_VIOLATIONS
-    return EXIT_VIOLATIONS if findings else EXIT_OK
+    return EXIT_VIOLATIONS if (findings or units) else EXIT_OK
 
 
 def _run_check(args: argparse.Namespace) -> int:
@@ -572,20 +661,22 @@ def _run_pointers(args: argparse.Namespace, cfg: _config.Config | None = None) -
 
 def _literals_args(cfg: _config.Config) -> argparse.Namespace:
     return argparse.Namespace(
-        keys="", paths=[], include_neutral=False, config=None
+        keys="", paths=[], include_neutral=False, call_keywords=False,
+        config=None, format="text",
     )
 
 
 def _names_args(cfg: _config.Config) -> argparse.Namespace:
     return argparse.Namespace(
-        paths=[], mode=None, config=None, allow_zero_comparable=False
+        paths=[], mode=None, config=None, allow_zero_comparable=False,
+        format="text",
     )
 
 
 def _coverage_args(cfg: _config.Config) -> argparse.Namespace:
     return argparse.Namespace(
         spec=None, field=None, level=None, baseline=None, write_baseline=False,
-        waiver_field=None, data=None, tests=[], config=None,
+        waiver_field=None, data=None, tests=[], config=None, format="text",
     )
 
 
@@ -595,7 +686,8 @@ def _pointers_args(cfg: _config.Config) -> argparse.Namespace:
 
 def _docs_args(cfg: _config.Config) -> argparse.Namespace:
     return argparse.Namespace(
-        paths=[], root=None, tol=0.0, strict_gaps=False, config=None
+        paths=[], root=None, tol=0.0, strict_gaps=False, config=None,
+        format="text",
     )
 
 
@@ -643,8 +735,24 @@ def build_parser() -> argparse.ArgumentParser:
         "reference codebase and bury the rest.",
     )
     lit.add_argument(
+        "--call-keywords",
+        action="store_true",
+        help="also report measured keys passed as keyword arguments to any "
+        "call, e.g. Stream(price=0.73). Off by default: a keyword names the "
+        "callee's parameter, and on the reference codebase pymoo's "
+        "SBX(eta=15) outnumbered the real hits. dict(...) is always read.",
+    )
+    lit.add_argument(
         "paths", nargs="*", help="files, directories, or globs "
         "(default: literals_paths from the config)",
+    )
+    lit.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="text for a person; json for a program -- a confidence per "
+        "finding and, where a repair exists, whether the caller may apply "
+        "it unattended.",
     )
     lit.set_defaults(func=_run_literals)
 
@@ -668,6 +776,14 @@ def build_parser() -> argparse.ArgumentParser:
     nm.add_argument(
         "paths", nargs="*", help="files, directories, or globs "
         "(default: names_paths from the config)",
+    )
+    nm.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="text for a person; json for a program -- a confidence per "
+        "finding and, where a repair exists, whether the caller may apply "
+        "it unattended.",
     )
     nm.set_defaults(func=_run_names)
 
@@ -748,6 +864,14 @@ def build_parser() -> argparse.ArgumentParser:
         "tests", nargs="*", help="test files, directories, or globs "
         "(default: tests_paths from the config)",
     )
+    cov.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="text for a person; json for a program -- a confidence per "
+        "finding and, where a repair exists, whether the caller may apply "
+        "it unattended.",
+    )
     cov.set_defaults(func=_run_coverage)
 
     dc = sub.add_parser(
@@ -779,6 +903,14 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument(
         "paths", nargs="*", help="markdown files, directories, or globs "
         "(default: docs_paths from the config)",
+    )
+    dc.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="text for a person; json for a program -- a confidence per "
+        "finding and, where a repair exists, whether the caller may apply "
+        "it unattended.",
     )
     dc.set_defaults(func=_run_docs)
     return p

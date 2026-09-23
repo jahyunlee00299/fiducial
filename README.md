@@ -152,6 +152,19 @@ been declared to stand for something measured. That declaration is required:
 guessed which numbers were physical would be wrong constantly and switched off
 within a day.
 
+A declaration can name a family instead of a spelling. Another project calls
+one quantity `k_17`, `kcat_r6` or `Titer_gL`, and an exact name only finds the
+spelling you already knew. `--keys 'k_*,*titer*'` declares the family; patterns
+match case-insensitively, exact names stay exact. The number is looked for
+wherever a project keeps it: `eta = …`, `obj.eta = …`, `params["eta"] = …`,
+`{"eta": …}`, `dict(eta=…)`, and a signature default `def f(eta=…)`, which is
+the same silent fallback as `.get("eta", …)`. A keyword argument to any other
+call names the callee's parameter, not yours: pymoo's `SBX(eta=15)` is a
+distribution index, and reading those by default took one codebase from 43
+findings to 217. `--call-keywords` (or `literals_call_keywords = true`) turns
+them on for a codebase whose constructors take measured values directly, like
+`Stream(price=0.73)`.
+
 Where this departs from its neighbours: [drift-linter][dl] and
 [scicode-lint][sl]'s `rep-003` both classify `dict.get(key, default)` as the
 *safe* form — absence is handled, so the code is fine. Against a declared
@@ -190,7 +203,7 @@ know where their numbers came from. A model writing the code does not, and
 `params.get("eta", 0.87)` is exactly what one does when it needs a number it
 does not have. The rules matter most when nobody human chose the value.
 
-So `--format=json` emits findings a program can act on:
+So every rule takes `--format=json` and emits findings a program can act on:
 
 ```
 $ fiducial pointers --format=json models/params/param_registry.json
@@ -232,6 +245,20 @@ has no answer.
 
 Rule ② runs the other way: its base rate is 1.6%, so it is `needs_review` even
 though its repair is mechanical.
+
+Across the five, what an agent may do differs by what the rule can know:
+
+| rule | fix | why |
+|---|---|---|
+| ① `literals` | none | the tool knows the number has no provenance, not what the provenance was — emitting a fix would invite the substitution the rule exists to catch |
+| ② `names` | `unsafe` / `suggest_only` | two repairs resolve it (rename, or correct the fields) and only the author knows which was meant |
+| ③ `coverage` | none | writing the missing test is authorship, not an edit |
+| ④ `docs` | `safe` / `auto` | the declaration names its upstream, so the correct value is known rather than guessed |
+| ⑤ `pointers` | depends | see the table above |
+
+Rules ① and ③ deliberately emit no `fix` at all. An agent *can* write a test or
+track down a source, and the `action` text says so — but that is authorship,
+and it must not arrive through the same field as a mechanical edit.
 
 The vocabulary is borrowed rather than invented. `applicability: safe | unsafe`
 is Ruff's, measured from `ruff check --output-format=json` rather than read

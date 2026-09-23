@@ -30,6 +30,8 @@ from pathlib import Path
 from fiducial import pointers as P
 from fiducial import signals as S
 
+REPO = Path(__file__).resolve().parents[1]
+
 
 def _index(tmp_path: Path, entries: dict, name: str = "i.json") -> Path:
     p = tmp_path / name
@@ -229,3 +231,123 @@ def test_applicability_uses_ruffs_measured_values(tmp_path: Path) -> None:
         _index(tmp_path, {"a": {"file": "m.json"}, "b": {"file": "dup.json"}})
     )
     assert {s.fix.applicability for s in sigs if s.fix} == {"safe", "unsafe"}
+
+
+# --- every rule, through the CLI ------------------------------------------
+
+
+def _cli(*argv: str, cwd: Path | None = None):
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, "-m", "fiducial", *argv],
+        capture_output=True, text=True, cwd=str(cwd or REPO),
+    )
+
+
+def test_every_rule_emits_the_same_envelope(tmp_path: Path) -> None:
+    """All five, not just the one the format was built on.
+
+    An adapter that exists in `signals.py` and is reachable from no
+    subcommand is the written-but-unwired shape this repo keeps catching, so
+    the wiring is asserted per rule rather than assumed from the module.
+    """
+    (tmp_path / "m.py").write_text(
+        'eta = params.get("eta", 0.87)\n', encoding="utf-8"
+    )
+    (tmp_path / "a_v15b.yaml").write_text("run_id: a_v16\n", encoding="utf-8")
+    (tmp_path / "spec.yaml").write_text(
+        "learnable_keys:\n  - alpha\n", encoding="utf-8"
+    )
+    (tmp_path / "test_x.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    (tmp_path / "SSOT.md").write_text("# s\n\nreaction time 48 min\n", encoding="utf-8")
+    (tmp_path / "DER.md").write_text(
+        "---\nssot:\n  source: SSOT.md\n  repeats:\n    reaction time: 48\n"
+        "---\nreaction time 36 min.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "m.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "i.json").write_text(
+        json.dumps({"entries": {"x": {"file": "m.json"}}}), encoding="utf-8"
+    )
+
+    invocations = {
+        "literals": ("literals", "--keys", "eta", "--format", "json",
+                     str(tmp_path / "m.py")),
+        "names": ("names", "--format", "json", str(tmp_path / "a_v15b.yaml")),
+        "coverage": ("coverage", "--spec", str(tmp_path / "spec.yaml"),
+                     "--format", "json", str(tmp_path / "test_x.py")),
+        "docs": ("docs", "--root", str(tmp_path), "--format", "json",
+                 str(tmp_path / "DER.md")),
+        "pointers": ("pointers", "--format", "json", str(tmp_path / "i.json")),
+    }
+
+    for rule, argv in invocations.items():
+        r = _cli(*argv)
+        assert r.stdout.lstrip().startswith("{"), f"{rule}: {r.stdout[:120]}{r.stderr[:120]}"
+        doc = json.loads(r.stdout)
+        assert doc["version"] == S.SCHEMA_VERSION, rule
+        assert set(doc["summary"]) == {
+            "total", "violations", "cannot_check", "auto_fixable", "needs_human"
+        }, rule
+        assert doc["findings"], f"{rule} produced no finding on a seeded defect"
+        for f in doc["findings"]:
+            assert f["rule"] == rule
+            assert f["status"] in ("violation", "cannot_check")
+            assert f["confidence"] in ("certain", "needs_review")
+            assert f["message"] and f["action"]
+
+
+def test_the_rules_that_cannot_repair_emit_no_fix(tmp_path: Path) -> None:
+    """Rules (1) and (3) must never hand an agent something to apply.
+
+    Neither a provenance nor a missing test is something a checker can
+    synthesise. Emitting a `fix` there would invite exactly the substitution
+    the rules exist to catch -- a plausible number, a test that asserts
+    nothing.
+    """
+    (tmp_path / "m.py").write_text(
+        'eta = params.get("eta", 0.87)\n', encoding="utf-8"
+    )
+    r = _cli("literals", "--keys", "eta", "--format", "json", str(tmp_path / "m.py"))
+    for f in json.loads(r.stdout)["findings"]:
+        assert "fix" not in f
+
+    (tmp_path / "spec.yaml").write_text(
+        "learnable_keys:\n  - alpha\n", encoding="utf-8"
+    )
+    (tmp_path / "test_x.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    r = _cli("coverage", "--spec", str(tmp_path / "spec.yaml"), "--format", "json",
+             str(tmp_path / "test_x.py"))
+    for f in json.loads(r.stdout)["findings"]:
+        assert "fix" not in f
+
+
+def test_coverage_omits_the_keys_that_are_gated(tmp_path: Path) -> None:
+    """A finding for something that is fine makes a consumer filter to count."""
+    (tmp_path / "spec.yaml").write_text(
+        "learnable_keys:\n  - alpha\n  - beta\n", encoding="utf-8"
+    )
+    (tmp_path / "test_x.py").write_text(
+        "def test_a():\n    assert params['alpha'] == 1\n", encoding="utf-8"
+    )
+    r = _cli("coverage", "--spec", str(tmp_path / "spec.yaml"), "--format", "json",
+             str(tmp_path / "test_x.py"))
+    keys = [f["key"] for f in json.loads(r.stdout)["findings"]]
+    assert keys == ["beta"], "the asserted key should not appear at all"
+
+
+def test_docs_reports_an_unreadable_declaration_as_cannot_check(
+    tmp_path: Path,
+) -> None:
+    """Its author believes it is gated, and it is not. Never a clean count."""
+    (tmp_path / "BAD.md").write_text(
+        "---\nssot:\n  source: [unclosed\n---\nx\n", encoding="utf-8"
+    )
+    r = _cli("docs", "--root", str(tmp_path), "--format", "json",
+             str(tmp_path / "BAD.md"))
+    doc = json.loads(r.stdout)
+    assert doc["summary"]["cannot_check"] >= 1
+    assert r.returncode == 2, "an unchecked document is not a pass"
