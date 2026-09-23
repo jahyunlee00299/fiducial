@@ -533,3 +533,37 @@ def from_units(mismatches: list[Any]) -> list[Signal]:
         )
         for m in mismatches
     ]
+
+
+def from_conflicts(conflicts: list[Any]) -> list[Signal]:
+    """Cross-file value conflicts. Always `needs_review`, never auto-fixable.
+
+    Measured on a 574-file public corpus: the first version of this rule ran
+    at 1 real finding in 20, and the filtering that got it to 5 in 5 went as
+    far as structure allows. Three keys that survive are indistinguishable on
+    every signal in the literal -- one is a stale copy, two are deliberate
+    `10x` probes -- so the confidence is `needs_review` by construction and
+    not by case.
+
+    No `fix` either, and for a stronger reason than the other rules: here the
+    tool does not merely fail to know which value is right, it cannot even
+    know whether the disagreement is a defect. Proposing an edit would ask an
+    agent to overwrite a test that is doing its job.
+    """
+    return [
+        Signal(
+            rule="conflicts",
+            status="violation",
+            confidence="needs_review",
+            message=c.explain(),
+            key=c.key,
+            action=(
+                "Read the sites before changing anything. A key bound to "
+                "different values may be a stale copy or two deliberately "
+                "different cases, and nothing in the code says which. Where "
+                "it is stale, the repair belongs wherever the value is "
+                "declared, not in each copy."
+            ),
+        )
+        for c in conflicts
+    ]

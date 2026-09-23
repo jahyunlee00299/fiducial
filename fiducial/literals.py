@@ -118,6 +118,12 @@ class Finding:
     kind: str          # "silent_fallback" | "bare_literal"
     snippet: str
     neutral: bool = False   # default was 0.0/1.0 -- "switched off", not a measurement
+    #: The literal itself, when the node held a plain number. Carried because a
+    #: caller comparing one key across files needs the VALUE, and re-parsing it
+    #: out of `snippet` means writing a second, worse number parser against
+    #: source text that may hold several numbers. `None` where the node was not
+    #: a bare constant.
+    value: float | None = None
 
     def explain(self) -> str:
         if self.kind == "silent_fallback":
@@ -191,7 +197,14 @@ class _Visitor(ast.NodeVisitor):
             return self.lines[lineno - 1].strip()[:160]
         return ""
 
-    def _record(self, node: ast.AST, key: str, kind: str, neutral: bool = False) -> None:
+    def _record(
+        self,
+        node: ast.AST,
+        key: str,
+        kind: str,
+        neutral: bool = False,
+        value: float | int | None = None,
+    ) -> None:
         self.found.append(
             Finding(
                 path=self.path,
@@ -201,6 +214,7 @@ class _Visitor(ast.NodeVisitor):
                 kind=kind,
                 snippet=self._snippet(node.lineno),
                 neutral=neutral,
+                value=None if value is None else float(value),
             )
         )
 
@@ -218,6 +232,7 @@ class _Visitor(ast.NodeVisitor):
                 self._record(
                     node, key, "silent_fallback",
                     neutral=default in self.neutral_defaults,
+                    value=default,
                 )
         self._keywords(node)
         self.generic_visit(node)
@@ -244,7 +259,7 @@ class _Visitor(ast.NodeVisitor):
         for t in targets:
             name = _target_name(t)
             if self.keys(name):
-                self._record(node, name, "bare_literal")
+                self._record(node, name, "bare_literal", value=val)
 
     # --- shapes a foreign project stores parameters in -------------------
     # The rule began on one codebase whose parameters are module names and
@@ -262,7 +277,7 @@ class _Visitor(ast.NodeVisitor):
             name = _const_str(k) if k is not None else None
             val = _literal(v)
             if self.keys(name) and val is not None and val not in _UNREMARKABLE:
-                self._record(v, name, "bare_literal")
+                self._record(v, name, "bare_literal", value=val)
         self.generic_visit(node)
 
     def _keywords(self, node: ast.Call) -> None:
@@ -284,7 +299,7 @@ class _Visitor(ast.NodeVisitor):
         for kw in node.keywords:
             val = _literal(kw.value)
             if self.keys(kw.arg) and val is not None and val not in _UNREMARKABLE:
-                self._record(kw.value, kw.arg, "bare_literal")
+                self._record(kw.value, kw.arg, "bare_literal", value=val)
 
     def _defaults(self, node) -> None:
         # def f(eta=0.87): -- a signature default is the same silent
@@ -300,6 +315,7 @@ class _Visitor(ast.NodeVisitor):
                 self._record(
                     default, arg.arg, "silent_fallback",
                     neutral=val in self.neutral_defaults,
+                    value=val,
                 )
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:

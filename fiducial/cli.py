@@ -32,6 +32,7 @@ from . import locales as _locales
 from . import names as _names
 from . import pointers as _pointers
 from . import runner as _runner
+from . import conflicts as _conflicts
 from . import signals as _signals
 
 EXIT_OK = 0
@@ -205,6 +206,24 @@ def _run_literals(args: argparse.Namespace, cfg: _config.Config | None = None) -
         )
         return EXIT_CANNOT_CHECK
 
+    if getattr(args, "conflicts", False):
+        # The same findings, grouped. A key bound to two different numbers is
+        # one defect reported as N findings by the per-site view above, and
+        # the grouping is the only way to see it.
+        found = _conflicts.find(findings)
+        if getattr(args, "format", "text") == "json":
+            env = _signals.Envelope(_signals.from_conflicts(found))
+            print(env.to_json())
+            return EXIT_VIOLATIONS if found else EXIT_OK
+        for c in found:
+            print(c.explain())
+            print()
+        print(
+            f"fiducial literals --conflicts: {len(found)} key(s) bound to "
+            f"more than one value, across {len(files)} file(s)"
+        )
+        return EXIT_VIOLATIONS if found else EXIT_OK
+
     if getattr(args, "format", "text") == "json":
         env = _signals.Envelope(_signals.from_literals(findings))
         print(env.to_json())
@@ -349,7 +368,7 @@ def _run_coverage(args: argparse.Namespace, cfg: _config.Config | None = None) -
     test_paths = list(args.tests) or list(cfg.tests_paths)
     tests = [f for f in _expand(test_paths) if f.suffix == ".py"]
     data = [f for f in _expand(list(args.data or ()) or list(cfg.data_paths))
-            if f.suffix == ".json"]
+            if f.suffix.lower() in (".json", ".yaml", ".yml")]
     try:
         results = _coverage.analyse(keys, tests, data)
     except ValueError as exc:
@@ -601,7 +620,10 @@ def _run_check(args: argparse.Namespace) -> int:
 def _run_pointers(args: argparse.Namespace, cfg: _config.Config | None = None) -> int:
     cfg = cfg if cfg is not None else _load_config(args)
     paths = list(args.paths) or list(cfg.pointers_paths)
-    files = [f for f in _expand(paths) if f.suffix == ".json"]
+    files = [
+        f for f in _expand(paths)
+        if f.suffix.lower() in (".json", ".yaml", ".yml")
+    ]
     if not files:
         print(
             f"fiducial: matched 0 index files from {paths!r}. "
@@ -662,7 +684,7 @@ def _run_pointers(args: argparse.Namespace, cfg: _config.Config | None = None) -
 def _literals_args(cfg: _config.Config) -> argparse.Namespace:
     return argparse.Namespace(
         keys="", paths=[], include_neutral=False, call_keywords=False,
-        config=None, format="text",
+        config=None, format="text", conflicts=False,
     )
 
 
@@ -753,6 +775,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="text for a person; json for a program -- a confidence per "
         "finding and, where a repair exists, whether the caller may apply "
         "it unattended.",
+    )
+    lit.add_argument(
+        "--conflicts",
+        action="store_true",
+        help="group the findings by key and report only the keys bound "
+        "to more than one value -- a stale copy looks like this, and the "
+        "per-site view cannot show it.",
     )
     lit.set_defaults(func=_run_literals)
 

@@ -69,12 +69,20 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
+
+from . import minyaml as _minyaml
 
 # Keys whose value names a FILE.  ``file`` and ``path`` are the common spellings;
 # the rest were found in this corpus.  A project with different field names
 # supplies its own through ``[tool.fiducial]``.
 FILE_KEYS = frozenset({"file", "path", "filename", "filepath", "source", "src"})
+
+# A key whose NAME ends this way points at files whatever it is called.
+# PEtab writes `condition_files`, `measurement_files`, `sbml_files`,
+# `observable_files` and `visualization_files` -- five spellings of one idea
+# across 35 models, and listing each by hand would miss the sixth.
+FILE_KEY_SUFFIXES = ("_file", "_files", "_path", "_paths")
 
 # Keys whose value names ANOTHER ENTRY in the same index, by id.
 ID_KEYS = frozenset({"parent_id", "parent", "extends", "base", "derived_from"})
@@ -83,6 +91,9 @@ ID_KEYS = frozenset({"parent_id", "parent", "extends", "base", "derived_from"})
 # spelling; a bare mapping of id -> entry is the other common shape and is
 # handled without configuration (see ``_entries``).
 ENTRY_CONTAINERS = ("entries", "items", "records", "index")
+
+# Containers whose value is a LIST of entries rather than a mapping of them.
+LIST_CONTAINERS = ("problems", "datasets", "models", "runs")
 
 
 @dataclass(frozen=True)
@@ -208,8 +219,27 @@ def _entries(doc: Any) -> dict[str, Any]:
         inner = doc.get(key)
         if isinstance(inner, dict):
             return inner
+    # A LIST container: PEtab's `problems:` holds one mapping per problem, and
+    # all 35 benchmark models write it that way. The list position becomes the
+    # entry id -- the document offers no better name, and `problems[0]` is what
+    # a reader of the file would call it too.
+    for key in ENTRY_CONTAINERS + LIST_CONTAINERS:
+        inner = doc.get(key)
+        if isinstance(inner, list):
+            return {
+                f"{key}[{i}]": item
+                for i, item in enumerate(inner)
+                if isinstance(item, dict)
+            }
+
     if all(isinstance(v, dict) for v in doc.values()) and doc:
         return doc
+
+    # A flat document whose own keys name files: no entries, one implicit
+    # entry. PEtab keeps `parameter_file:` at the top level beside `problems:`,
+    # and skipping it would leave a real pointer unchecked.
+    if any(_is_file_key(k, FILE_KEYS) for k in doc):
+        return {"": doc}
     return {}
 
 
@@ -228,14 +258,39 @@ def pointers(
     for entry_id, entry in _entries(doc).items():
         if not isinstance(entry, dict):
             continue
-        for key, value in entry.items():
-            if not isinstance(value, str) or not value:
+        out.extend(_entry_pointers(entry_id, entry, file_keys, id_keys))
+    return out
+
+
+def _is_file_key(key: str, file_keys: frozenset[str]) -> bool:
+    low = key.lower()
+    return low in file_keys or low.endswith(FILE_KEY_SUFFIXES)
+
+
+def _entry_pointers(
+    entry_id: str,
+    entry: dict[str, Any],
+    file_keys: frozenset[str],
+    id_keys: frozenset[str],
+) -> list[Pointer]:
+    """Pointers in one entry, including the ones written as a list.
+
+    An index may name one file or several under the same key -- PEtab writes
+    `sbml_files:` with a list beneath it even where the list holds one item. A
+    reader that accepts only a string finds nothing there, and that is worse
+    than finding a broken pointer: it reports an index clean that it never
+    actually read.
+    """
+    out: list[Pointer] = []
+    for key, value in entry.items():
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if not isinstance(item, str) or not item:
                 continue
-            low = key.lower()
-            if low in file_keys:
-                out.append(Pointer(entry_id, key, "file", value))
-            elif low in id_keys:
-                out.append(Pointer(entry_id, key, "id", value))
+            if _is_file_key(key, file_keys):
+                out.append(Pointer(entry_id, key, "file", item))
+            elif key.lower() in id_keys:
+                out.append(Pointer(entry_id, key, "id", item))
     return out
 
 
@@ -288,14 +343,23 @@ def inspect_file(
     file_keys: frozenset[str] = FILE_KEYS,
     id_keys: frozenset[str] = ID_KEYS,
 ) -> Report:
-    """Load ``index`` as JSON and resolve its pointers.
+    """Load ``index`` as JSON or YAML and resolve its pointers.
 
     A malformed index raises rather than returning an empty report.  An index
     that cannot be parsed is an index whose pointers are unknown, and reporting
     "0 broken" for it would be the false all-clear this package exists to
     remove.
+
+    The format is chosen by suffix, not sniffed: an index named `.yaml` that
+    happens to be valid JSON is still read by the YAML reader, which accepts
+    it, while guessing from content would make the same file parse differently
+    depending on what it contains.
     """
-    doc = json.loads(index.read_text(encoding="utf-8"))
+    text = index.read_text(encoding="utf-8")
+    if index.suffix.lower() in (".yaml", ".yml"):
+        doc = _minyaml.loads(text)
+    else:
+        doc = json.loads(text)
     return inspect_doc(index, doc, root, file_keys, id_keys)
 
 

@@ -69,6 +69,8 @@ ALLOWED_SKIP_REASONS = (
     "pre-commit not installed",  # the framework path is genuinely unproven without it
     "no tomllib",                # 3.10 has no stdlib TOML to differential-test against
     "not a git checkout",        # a copied tree has no .git; CI does, and asserts so
+    "PEtab corpus",              # 35 public models, cloned locally, absent in CI
+    "no PyYAML",                 # the differential test needs a second reader
 )
 
 #: The committed floor: how many tests this suite is known to execute.  Read

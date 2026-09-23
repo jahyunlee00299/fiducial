@@ -1130,3 +1130,96 @@ Full suite 249 executed (lean floor 245), 2 skipped (reference corpus).
   A cross-file conflict view is the obvious next unit.
 - Rule (5) still reads `.json` indexes only; PEtab problem YAMLs (35 models)
   are out of reach.
+
+## Unit: cross-file value conflicts
+
+**Outcome**: one declared key bound to different numbers in different places,
+reported as one finding instead of N.
+
+### The measurement that nearly killed it
+
+First version grouped by key alone. An adversarial audit read every flagged
+site and returned **1 CONFIRMED / 19 REFUTED**:
+
+```
+corpus         574 files, keys `k_*,titer`  -> 20 conflicts
+sites          259 total, 240 (93%) in test files
+refuted        10x monotonicity probes (k_4 4.8/48.0, k_7, k_8)
+               2x scenario variants (k_17's 88.0 = 2 x 44.0)
+               per-test fixture dicts of arbitrary round numbers (kb##, _FakeTE##)
+               one regression sample fanned across every key (trial 1768)
+               `titer` = 8 unrelated biorefineries sharing a generic name
+```
+
+The audit also **refuted the answer key** this session was working from. The
+prepared `cases/bip_k17/` file (1494 lines, `setdefault('k_17', 44.0)`) is a
+different version from the scanned clone (2078 lines, `0.1077`), and three
+files in the clone independently narrate "corrected 44 -> 0.1077". The
+direction reported earlier in this session was backwards, and it was accepted
+because `git cat-file` had already shown the fix commit was unreachable in a
+depth-1 clone -- the missing history should have invalidated the answer key
+rather than being noted and passed over.
+
+### What fixed it, and what did not
+
+Anchoring the comparison: a conflict needs a value in non-test **code**, and
+that is what fixtures are compared against; keys bucket per package. 20 -> 5,
+and `k_17` survived -- which matters, because the real defect lives *in* the
+test files (code corrected to 0.1077, three test files still asserting 44.0).
+Excluding test files outright would have scored better on precision and
+deleted the only true positive.
+
+**A discriminator was looked for and not found.** On the same corpus `k_15`,
+`k_16` and `k_17` are identical on every structural signal measured -- test
+files carrying a value the code lacks (3 / 3 / 3), files carrying no code
+value at all (2 / 3 / 2) -- and one is a stale copy while two are deliberate
+probes. The difference is in what the test MEANS. Recorded rather than
+guessed at: the finding is `needs_review` by construction, carries no fix,
+and the docstring says why.
+
+### Refutation
+
+Six adverse cases, each one of a refuted class: fixtures disagreeing with
+each other, one value repeated, the same name in two packages, values only in
+tests, a `10x` probe, and the limit case itself (`test_the_remaining_
+ambiguity_is_real` asserts that a probe and a stale copy are indistinguishable
+here rather than pretending otherwise).
+
+A scope bug surfaced while verifying the README: `_scope` kept the filename
+when a file sat directly under `src/`, putting `src/model.py` and `tests/` in
+different buckets so the documented example reported nothing. Found by running
+the README's own command, not by reading the code.
+
+## Unit: YAML indexes for rule (5)
+
+**Outcome**: rule (5) reads `.yaml`/`.yml`, so the largest public corpus of
+indexes is reachable at all.
+
+### Evidence
+
+```
+35 PEtab benchmark models   180 pointers checked
+1 broken                    Zhao_QuantBiol2020 names SBML_Zhao_...xml;
+                            the file present is model_Zhao_...xml
+0 blind
+```
+
+Confirmed independently of the tool with `ls` before trusting the report. The
+rule proposes no repair for it, correctly: the basename changed prefix, so
+there is no relocation to find and it does not invent one.
+
+### The parser, and why it is ours
+
+`minyaml.py`, block subset only. **Differential-tested against PyYAML on every
+model in the corpus: 36/36 identical**, including both indentation styles the
+corpus uses (`- condition_files:` opening a mapping on the dash line in 5
+models, indented under it in 29). Refuses anchors, block scalars, flow
+collections and multi-document files rather than approximating them -- the
+same reasoning as the 3.10 TOML fallback, since a parser that half-understands
+an index hands back pointers nobody checked.
+
+Three structural extensions were needed beyond parsing: a list container
+(`problems:`), keys ending `_file`/`_files`/`_path`/`_paths` (PEtab spells the
+same idea five ways), and a value that is a list of filenames. Without them
+the parser succeeded and rule (5) found zero pointers -- parsing is not
+reading.

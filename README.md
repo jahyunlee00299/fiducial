@@ -144,6 +144,52 @@ against its own contents; these entries are internally *consistent* and simply
 describe a file that is not present. A consistency check cannot see a missing
 referent.
 
+### One key, two values
+
+Rule ① reports each literal on its own, which is the right unit for "this
+number has no provenance" and the wrong one for the defect the same scan walks
+past:
+
+```
+$ fiducial literals --keys 'k_*' --conflicts src/
+k_17: bound to 2 different values (0.1077, 44.0) across 2 places, spread 409x.
+Both claim to be the same measured quantity, so at least one is wrong -- and
+nothing in the code says which.
+    src/model.py:402: 0.1077 (bare_literal, code)
+    tests/test_burden.py:37: 44.0 (bare_literal, test)
+```
+
+That is a real case: the value was corrected in the code and three test files
+still assert against the old one.
+
+**The first version of this ran at 1 real finding in 20.** An adversarial audit
+read every flagged site and refuted nineteen — the corpus was 93% test
+fixtures, and fixtures disagree by design (`10x` monotonicity probes, `2x`
+scenario variants, per-test dicts of round numbers), while a ninth value under
+`titer` turned out to be eight unrelated packages sharing a generic name. So
+the comparison is anchored: a conflict needs a value in non-test **code**, and
+that is what the fixtures are compared against; keys are bucketed per package.
+Twenty findings became five, and the real one survived.
+
+It still cannot separate a stale fixture from a deliberate one — on that corpus
+three keys are identical on every structural signal and one of them is the
+defect. The finding is therefore always `needs_review` and never carries a
+fix: proposing an edit would ask an agent to overwrite a test doing its job.
+
+### YAML indexes
+
+Rule ⑤ reads `.yaml` and `.yml` as well as `.json`, with a block-subset reader
+rather than a dependency — a list container (`problems:`), keys ending
+`_file`/`_files`, and a value that is a list of filenames are all resolved.
+
+Checked against the 35 [PEtab benchmark models][petab]: 180 pointers, and one
+index naming an SBML file that is not there. The reader is differential-tested
+against PyYAML on every model in that corpus, and refuses anchors, block
+scalars, flow collections and multi-document files rather than approximating
+them.
+
+[petab]: https://github.com/Benchmark-Models/Benchmark-Models-PEtab
+
 ## Why these, and not more
 
 Both shapes are ordinary legal code, so the rules only have force once a key has
