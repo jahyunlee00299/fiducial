@@ -141,8 +141,29 @@ class Finding:
         return f"{self.path}:{self.line}:{self.col}: [{self.kind}] {why}\n    {self.snippet}"
 
 
+#: Arithmetic on two literals is still a literal. Measured on a public
+#: corpus: a pressure fix (`P=6 * 101325` -> `P=2.1 * 101325`, commit
+#: 6ee1389052) was invisible because the value is a `BinOp`, not a
+#: `Constant` -- and writing a measured quantity times its unit is ordinary
+#: in scientific code (`6 * 101325` for six atmospheres, `30 + 273.15` for a
+#: temperature). Reading only `Constant` misses that whole shape.
+_FOLDABLE = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Div: lambda a, b: a / b if b else None,
+    ast.Pow: lambda a, b: a ** b,
+}
+
+
 def _literal(node: ast.AST) -> float | int | None:
-    """The numeric value of ``node``, including negation; else ``None``."""
+    """The numeric value of ``node``, including negation and folded arithmetic.
+
+    Folding is deliberately shallow: both operands must themselves be
+    literals, so `6 * 101325` folds and `6 * scale` does not. A value that
+    depends on a name is not a literal -- it has a provenance, which is the
+    whole thing this rule is looking for.
+    """
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         if isinstance(node.value, bool):
             return None
@@ -150,6 +171,17 @@ def _literal(node: ast.AST) -> float | int | None:
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         inner = _literal(node.operand)
         return None if inner is None else -inner
+    if isinstance(node, ast.BinOp):
+        op = _FOLDABLE.get(type(node.op))
+        if op is None:
+            return None
+        left, right = _literal(node.left), _literal(node.right)
+        if left is None or right is None:
+            return None
+        try:
+            return op(left, right)
+        except (ZeroDivisionError, OverflowError, ValueError):
+            return None
     return None
 
 

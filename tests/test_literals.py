@@ -141,6 +141,37 @@ def test_multiple_findings_all_surface():
     check("sorted by line", [x.line for x in f] == [1, 2])
 
 
+
+def test_arithmetic_on_two_literals_is_still_a_literal():
+    """`P=6 * 101325` is six atmospheres written the way engineers write it.
+
+    Found by a recall measurement rather than by review: a public pressure fix
+    (`P=6 * 101325` -> `P=2.1 * 101325`, Bioindustrial-Park 6ee1389052) was
+    invisible because the value is a `BinOp`, not a `Constant`. Writing a
+    measured quantity times its unit is ordinary in scientific code, so
+    reading only `Constant` misses that whole shape.
+    """
+    src = "f(P=6 * 101325)\ng(P=30 + 273.15)\nh(P=2 ** 3)\n"
+    got = {
+        f.line: f.value
+        for f in scan_source(Path("m.py"), src, ["P"], call_keywords=True)
+    }
+    check("6 * 101325 folds", got.get(1) == 607950.0, got)
+    check("30 + 273.15 folds", got.get(2) == 303.15, got)
+    check("2 ** 3 folds", got.get(3) == 8, got)
+
+
+def test_folding_stops_at_a_name():
+    """`6 * scale` is not a literal -- it has a provenance, which is the point.
+
+    Folding deeper would turn "this number came from somewhere" into "this
+    number is six times something", and the rule exists to find the first.
+    """
+    src = "f(P=6 * scale)\ng(P=BASE + 1)\n"
+    found = scan_source(Path("n.py"), src, ["P"], call_keywords=True)
+    check("no finding for a name-dependent value", found == [], found)
+
+
 if __name__ == "__main__":
     for fn in [
         test_silent_fallback_shapes, test_neutral_defaults_split_out,
@@ -150,6 +181,8 @@ if __name__ == "__main__":
         test_non_literal_is_clean, test_line_numbers_are_real,
         test_empty_keys_refuses, test_refute_mutation_breaks_the_rule,
         test_multiple_findings_all_surface,
+        test_arithmetic_on_two_literals_is_still_a_literal,
+        test_folding_stops_at_a_name,
     ]:
         print(f"\n{fn.__name__}")
         fn()

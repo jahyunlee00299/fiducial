@@ -1223,3 +1223,68 @@ Three structural extensions were needed beyond parsing: a list container
 same idea five ways), and a value that is a list of filenames. Without them
 the parser succeeded and rule (5) found zero pointers -- parsing is not
 reading.
+
+## Unit: recall against real fix commits
+
+**Outcome**: the tool's hit rate measured against defects a human author
+actually corrected, rather than against cases chosen to suit it.
+
+### The answer key was wrong, and the history proves it
+
+The prepared case (`cases/bip_k17/plot_kin_opt_parameter_sets.py`) turned out
+to be `6001ed0ef5^` -- the **before** state, byte-identical. It had been
+labelled as the answer. Fetching the real history settles the direction the
+adversarial audit had already argued from source comments:
+
+```
+commit 6001ed0ef5  "fix(isobutanol): correct plot baseline k_17 to the live
+                    0.1077 g/L/h"
+-    k_ref.setdefault('k_17', 44.0)
++    k_ref.setdefault('k_17', 0.1077)
+```
+
+So `0.1077` is right and `44.0` is stale, which is the opposite of what was
+reported earlier in this session. The clone was `--depth 1`; `git cat-file`
+had already shown the fix commit unreachable, and that should have
+invalidated the answer key rather than being noted and passed over. The case
+directory now holds `before_`, `after_` and the patch, each extracted from
+history rather than assembled by hand.
+
+### Selection was mechanical, because it had to be
+
+Picking cases that look like what the tool catches measures nothing. The rule
+was written before any result was seen: a `fix` commit touching exactly one
+`.py` file, changing exactly one `<name> = <number>`. Over 130 candidates it
+yielded 5.
+
+### The measurement, with its scope stated
+
+```
+case         key                 in scope   caught   what it is
+6001ed0ef5   k_17                yes        YES      enzyme rate, g/L/h
+6ee1389052   P                   yes        YES      column pressure, Pa
+902e13ba4f   top                 no         --       plot margin
+4b24d8a72f   n_sims              no         --       solver iteration cap
+ea23dcffbf   max_n_glu_spikes    no         --       algorithm setting
+```
+
+**Recall 2/2 on the in-scope cases.** Three of five changed numbers are not
+measured quantities at all, and counting them as misses would measure the
+wrong thing -- rule (1) applies to keys a project *declares* measured and has
+no opinion about which those are.
+
+Two is a small sample and the number should be read that way. What it is not
+is cherry-picked: the selection rule ran over the whole history and these are
+what it returned.
+
+### It found a real gap in rule (1)
+
+The pressure case did not fire at first. `P=6 * 101325` is a `BinOp`, and
+`_literal` read only `Constant` and unary minus -- so a measured quantity
+written as *value times unit*, which is ordinary in scientific code, was
+invisible. Now folded, deliberately shallow: both operands must be literals,
+so `6 * 101325` folds and `6 * scale` does not, because a value depending on
+a name has a provenance and that is what the rule is looking for.
+
+Measured effect on the public corpus: rule (1) findings 289 -> 316, conflicts
+unchanged at 5. The folding found more of the shape without adding noise.
