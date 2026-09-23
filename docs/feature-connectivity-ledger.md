@@ -1288,3 +1288,66 @@ a name has a provenance and that is what the rule is looking for.
 
 Measured effect on the public corpus: rule (1) findings 289 -> 316, conflicts
 unchanged at 5. The folding found more of the shape without adding noise.
+
+## Unit: recall on a second corpus
+
+The first corpus gave two in-scope cases. A second one gives more, and its
+commits are ones whose intent is known -- so this is the harder measurement, and it found a defect
+the public pass could not.
+
+### Same mechanical selection, larger sample
+
+2105 commits, 1134 matching `fix|정정|수정|correct|bug`, of which **8** touch
+one `.py` file and change exactly one numeric literal. Five are measured
+quantities:
+
+```
+kcat_a        4.0 -> 50.9     an enzyme kcat, s-1; the comment had
+                              preferred a reported value over its own
+                              derivation
+CAP_A         500 -> 650      a transfer ceiling; commit says "source it"
+base_add_a    0.5 -> 0.0      commit says "unsourced third term"
+alpha_a       2.0 -> 0.0      declared learnable in the project's own spec
+t_max         1 -> 0.5        fit window, hours
+```
+
+Two commits say **"unsourced"** in their own subject line. That is rule (1)'s
+definition quoted back by the author who wrote the fix.
+
+### It scored 3 of 5, and the two misses were the same bug
+
+`alpha_a = 2.0` and `t_max = 1` were invisible because their values sat in
+`_UNREMARKABLE = {0, 1, -1, 2, 100}`.
+
+That exemption was written so `x = 0` and a `+1` index would not be reported.
+But rule (1) only ever looks at keys a project has **declared** measured, so
+the counter case cannot reach it -- `i = 1` is not a declared parameter. The
+exemption was sitting a layer above where its justification applies.
+
+Measured before touching it: across 97 declared keys, it suppressed **2 sites
+out of 170**. Almost no quiet bought, two of five answer cases lost.
+
+### The fix, and the part deliberately left broken
+
+It now applies where a key was matched by a PATTERN, not where it was named.
+`--keys 'k_*'` is a net and should skip loop bounds; `--keys alpha_a` means
+that parameter whatever its value. Recall 3/5 -> 4/5, noise 170 -> 172.
+
+**Zero and one stay exempt even for a named key, and that costs `t_max`.**
+Unblocking them recovered that one case and brought 96 findings with it --
+a dozen `*_mM = 0.0` and `*_scale = 1.0` sites -- terms switched off and
+scales left unchanged. One against ninety-six, measured rather than argued.
+
+The two cannot be separated by value, since `1 == 1.0`. The only available
+proxy is `1` written as an int against `1.0` as a float, which rests on a
+formatting habit and breaks the moment an author writes `t_max = 1.0`. A
+recall of 4 in 5 with a stated reason is worth more than 5 in 5 bought with a
+rule that holds by accident, so the loss is recorded here and in
+`test_zero_and_one_stay_exempt_even_when_named` rather than papered over.
+
+### Scope
+
+Five in-scope cases is still a small sample, and three of the eight selected
+commits changed numbers rule (1) does not claim -- a regression snapshot, a
+solver cap, a count of test configurations. Counting those as misses would
+measure the wrong thing.

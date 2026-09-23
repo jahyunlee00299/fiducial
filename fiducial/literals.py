@@ -52,8 +52,37 @@ _FALLBACK_METHODS = {"get", "pop", "setdefault"}
 
 #: Numbers that carry no physical claim on their own.  Flagging ``x = 0`` or a
 #: ``+1`` index as an unsourced measurement is how a checker earns its way into
-#: a permanent ignore list, so they are exempt regardless of the key.
+#: a permanent ignore list.
+#:
+#: 🔴 The exemption sat at the wrong layer until 260924, and it cost recall on
+#: a reference repository. Rule (1) only ever looks at keys a project has
+#: DECLARED measured, so the index-and-counter case it was written for cannot
+#: reach it: `i = 1` is not a declared parameter. What it did reach was
+#: `t_max = 1` (a fit window, in hours) and `"alpha_nh3": 2.0` (a key that
+#: project's spec declares learnable) -- both real corrections the author
+#: later made, and both invisible.
+#:
+#: Measured before changing it: across 97 declared keys in that repo, the
+#: exemption suppressed **2 sites out of 170**. It was buying almost no quiet
+#: and losing two of five answer cases, so it now applies only where the key
+#: was matched by a PATTERN rather than named exactly. A project that writes
+#: `--keys 'k_*'` is casting a wide net and wants the counters kept out; a
+#: project that names `alpha_nh3` means that key, whatever its value.
+#:
+#: 🔴 `0` and `1` stay exempt even for an exactly-named key, and that is a
+#: deliberate loss. Unblocking them recovered `t_max = 1` (a fit window the
+#: author later corrected to 0.5) and, with it, 96 findings of
+#: `tris_mM = 0.0` / `xr_activity_scale = 1.0` -- terms switched off and
+#: scales left unchanged, which is a baseline being composed rather than a
+#: measurement being invented. One answer case against ninety-six, measured.
+#:
+#: The two cannot be separated by value, because `1 == 1.0`. They differ in
+#: what the key MEANS, and the only proxy available -- `1` written as an int
+#: versus `1.0` as a float -- rests on a formatting habit that breaks the
+#: moment an author writes `t_max = 1.0`. Recall of 4 in 5 with an honest
+#: reason beats 5 in 5 bought with a rule that holds by accident.
 _UNREMARKABLE = {0, 1, -1, 2, 100}
+_ALWAYS_UNREMARKABLE = {0, 1}
 
 #: Defaults that mean "this term is switched off" (0.0) or "this scale is
 #: neutral" (1.0) rather than "here is a value somebody measured".
@@ -107,6 +136,16 @@ class KeyMatcher:
             return True
         low = name.lower()
         return any(fnmatch.fnmatchcase(low, p) for p in self.patterns)
+
+    def named_exactly(self, name: str | None) -> bool:
+        """The caller wrote this key out, rather than casting a net at it.
+
+        The distinction decides whether `_UNREMARKABLE` applies. Naming
+        `alpha_nh3` means that parameter whatever its value; writing `k_*`
+        means a family, and a family sweep picks up counters and indices the
+        exemption exists to keep quiet.
+        """
+        return bool(name) and name in self.exact
 
 
 @dataclass(frozen=True)
@@ -286,12 +325,17 @@ class _Visitor(ast.NodeVisitor):
         self, targets: Iterable[ast.AST], value: ast.AST, node: ast.AST
     ) -> None:
         val = _literal(value)
-        if val is None or val in _UNREMARKABLE:
+        if val is None:
             return
         for t in targets:
             name = _target_name(t)
-            if self.keys(name):
-                self._record(node, name, "bare_literal", value=val)
+            if not self.keys(name):
+                continue
+            if val in _ALWAYS_UNREMARKABLE or (
+                val in _UNREMARKABLE and not self.keys.named_exactly(name)
+            ):
+                continue
+            self._record(node, name, "bare_literal", value=val)
 
     # --- shapes a foreign project stores parameters in -------------------
     # The rule began on one codebase whose parameters are module names and
@@ -308,8 +352,13 @@ class _Visitor(ast.NodeVisitor):
         for k, v in zip(node.keys, node.values):
             name = _const_str(k) if k is not None else None
             val = _literal(v)
-            if self.keys(name) and val is not None and val not in _UNREMARKABLE:
-                self._record(v, name, "bare_literal", value=val)
+            if not self.keys(name) or val is None:
+                continue
+            if val in _ALWAYS_UNREMARKABLE or (
+                val in _UNREMARKABLE and not self.keys.named_exactly(name)
+            ):
+                continue
+            self._record(v, name, "bare_literal", value=val)
         self.generic_visit(node)
 
     def _keywords(self, node: ast.Call) -> None:
@@ -330,8 +379,13 @@ class _Visitor(ast.NodeVisitor):
             return
         for kw in node.keywords:
             val = _literal(kw.value)
-            if self.keys(kw.arg) and val is not None and val not in _UNREMARKABLE:
-                self._record(kw.value, kw.arg, "bare_literal", value=val)
+            if not self.keys(kw.arg) or val is None:
+                continue
+            if val in _ALWAYS_UNREMARKABLE or (
+                val in _UNREMARKABLE and not self.keys.named_exactly(kw.arg)
+            ):
+                continue
+            self._record(kw.value, kw.arg, "bare_literal", value=val)
 
     def _defaults(self, node) -> None:
         # def f(eta=0.87): -- a signature default is the same silent
