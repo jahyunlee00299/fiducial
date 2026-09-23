@@ -1,0 +1,14 @@
+# Two floors, in two different units. A ratchet: raise them when
+# tests are added. Lowering either must be a deliberate, reviewed
+# edit -- never a silent side effect of deleting a test.
+#
+# `executed` is the count in the LEANEST environment the suite is
+# expected to pass in: a clean checkout with pytest, and nothing
+# else. A machine with more installed runs more -- 202 here, where
+# `pre-commit` is present and contributes four tests that are not
+# even collected without it -- and more than the floor is fine.
+# Setting it to the richer number instead would fail every CI run
+# and every fresh clone, which is how it was first set (measured
+# 260923: floor 202, CI ran 196, exit 1).
+executed = 208
+defined  = 176

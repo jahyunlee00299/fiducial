@@ -1,0 +1,169 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # pytest is a TEST dependency only. The package itself stays stdlib-only,
+      # which the "Package builds" step below proves by installing it with no
+      # extras and running it.
+      #
+      # Why the suite needs a runner at all: `tests/test_docs.py` is written in
+      # pytest style (fixtures, parametrize, raises) while the other four are
+      # self-running stdlib scripts. The previous workflow ran every file as
+      # `python tests/test_<x>.py`. For the pytest-style file that imports the
+      # module, defines 28 functions, calls NONE of them, and exits 0 -- so 28
+      # of 70 test functions, the whole of rule (4), were counted as passing
+      # without executing. Measured 260922: a deliberately broken assertion in
+      # that file still exited 0 on this path.
+      - name: Install pytest (tests only)
+        run: python -m pip install --quiet pytest
+
+      # Installed BEFORE the suite runs, and this ordering is load-bearing.
+      # `tests/test_pytest_plugin.py` drives the plugin through pytest's
+      # `pytester` fixture, which starts a fresh session in a temp directory:
+      # it inherits neither this session's `-p` flags nor the repo's conftest,
+      # so the ONLY way it finds the plugin is the `pytest11` entry point that
+      # a pip install creates. Measured 260923 across four CI runs -- eleven
+      # failures, `unrecognized arguments: --fiducial-spec` -- while the same
+      # suite passed locally because fiducial happened to be installed there.
+      #
+      # `-e` so the tests exercise the checkout rather than a copy of it, and
+      # `--no-deps` so this cannot quietly pull anything in: the package
+      # declares no dependencies and the build below re-proves it installs
+      # clean from a plain `pip install .`.
+      - name: Install the package so the pytest11 entry point exists
+        run: python -m pip install --quiet --no-deps -e .
+
+      # run_all.py collects both styles AND asserts the count against the
+      # committed floor in tests/EXPECTED_TESTS. The count is the point: a
+      # runner that silently collects nothing looks exactly like one that
+      # passes, and this package exists to refuse that equivalence.
+      - name: Run tests, and assert how many actually ran
+        run: python tests/run_all.py
+
+      # The fallback path must also be honest. With no pytest installed the
+      # stdlib runner cannot execute the pytest-style file, and it must say so
+      # by exiting 2 (cannot check) rather than 0 (clean).
+      - name: The no-pytest fallback reports "cannot check", not "clean"
+        run: |
+          set +e
+          python tests/run_all.py --stdlib > fallback.log 2>&1; rc=$?
+          set -e
+          cat fallback.log
+          [ "$rc" -eq 2 ] || { echo "expected exit 2 from the partial fallback, got $rc"; exit 1; }
+          grep -q "UNCHECKED here, not passing" fallback.log || {
+            echo "the fallback did not name its own blind spot"; exit 1; }
+
+      # The reference-corpus test SKIPS when the private corpus is absent, which
+      # is always the case in CI. Prove the skip is the *only* thing that
+      # happened -- a suite that silently skips everything is the failure this
+      # package exists to catch.
+      - name: Assert the corpus test skipped, not passed vacuously
+        run: |
+          out="$(python tests/test_reference_corpus.py)"
+          echo "$out"
+          # The message names the unset variable rather than the corpus, so
+          # the assertion says which one: a skip for any other reason means
+          # the file stopped running and would otherwise pass unnoticed.
+          echo "$out" | grep -q "SKIP FIDUCIAL_REFERENCE_CORPUS is not set" || {
+            echo "expected the corpus test to skip for an unset"
+            echo "FIDUCIAL_REFERENCE_CORPUS; got something else"; exit 1; }
+
+      # `run_all.py` counts skips separately from executions and accepts one
+      # only when its REASON names something the environment cannot supply.
+      # That is load-bearing here: the two rule (5) corpus tests skip on every
+      # runner, and without it the suite lands below its floor and fails a
+      # healthy checkout.
+      #
+      # So assert the allowance is being SPENT, and spent exactly: two skips,
+      # both named for the corpus. If a third appears, run_all already fails --
+      # this step catches the opposite drift, where the corpus tests quietly
+      # start passing (i.e. something made a private corpus reachable in CI)
+      # and the allowance silently covers a different skip instead.
+      - name: The skip allowance is spent on the corpus tests, and only those
+        run: |
+          out="$(python -m pytest tests/ -q -rs --no-header)"
+          echo "$out" | tail -20
+          # `run_all` already fails on a skip whose reason is not in its list.
+          # What this step adds is the reason a CI runner must NEVER give:
+          # "not a git checkout". That one is legitimate in the copied trees
+          # the floor probes build, so it is on the list -- but a real CI run
+          # IS a checkout, and seeing it here would mean four pre-commit tests
+          # silently stopped running.
+          echo "$out" | grep '^SKIPPED' || echo "(no skips)"
+          echo "$out" | grep '^SKIPPED' | grep -q "not a git checkout" && {
+            echo "CI is a git checkout, so this skip means those tests"
+            echo "stopped running for some other reason"
+            exit 1; }
+          echo "no checkout-related skips: ok"
+
+      - name: Package builds and the entry point works
+        run: |
+          python -m pip install --quiet .
+          fiducial --help > /dev/null
+
+          # Prove the installed console script enforces its own exit contract,
+          # rather than merely starting. `tests/` holds no YAML, so `names` must
+          # report "cannot check" (2) -- NOT a clean 0.
+          set +e
+          fiducial names tests/; rc=$?
+          set -e
+          [ "$rc" -eq 2 ] || { echo "expected exit 2 on an empty match, got $rc"; exit 1; }
+
+          # And a real violation must exit 1.
+          mkdir -p "$RUNNER_TEMP/pgfix"
+          printf 'run_id: a_v16\n' > "$RUNNER_TEMP/pgfix/a_v15b.yaml"
+          set +e
+          fiducial names "$RUNNER_TEMP/pgfix"; rc=$?
+          set -e
+          [ "$rc" -eq 1 ] || { echo "expected exit 1 on a violation, got $rc"; exit 1; }
+
+      # The pytest plugin ships from the same package via the `pytest11` entry
+      # point, so it only exists once fiducial is INSTALLED -- which is why
+      # this step sits after the install above and not with the other tests.
+      # Two things are proven: pytest discovers it at all, and it stays inert
+      # for a project that does not ask for it.
+      - name: The pytest plugin is discovered, and is inert by default
+        run: |
+          python -m pytest --help 2>&1 | grep -q -- "--fiducial-spec" || {
+            echo "pytest did not discover the plugin via pytest11"; exit 1; }
+
+          mkdir -p "$RUNNER_TEMP/pgplug"
+          printf 'def test_ok():\n    assert True\n' > "$RUNNER_TEMP/pgplug/test_x.py"
+          out="$(python -m pytest "$RUNNER_TEMP/pgplug" -q 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q "fiducial rule (3)" && {
+            echo "the plugin spoke without being asked for a spec"; exit 1; }
+          echo "inert without a spec: ok"
+
+          # And it reports when it IS asked. `beta` is declared and gated by
+          # nothing, so strict must fail the session -- a plugin that only ever
+          # prints is one nobody notices.
+          printf 'learnable_keys:\n  - alpha\n  - beta\n' > "$RUNNER_TEMP/pgplug/spec.yaml"
+          printf 'def test_alpha():\n    alpha = 1\n    assert alpha == 1\n' \
+            > "$RUNNER_TEMP/pgplug/test_x.py"
+          set +e
+          python -m pytest "$RUNNER_TEMP/pgplug" -q \
+            --fiducial-spec "$RUNNER_TEMP/pgplug/spec.yaml" \
+            --fiducial-strict > "$RUNNER_TEMP/plug.log" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/plug.log"
+          [ "$rc" -ne 0 ] || { echo "strict mode did not fail the session"; exit 1; }
+          grep -q "no gate among the tests that ran" "$RUNNER_TEMP/plug.log" || {
+            echo "strict mode failed without saying why"; exit 1; }

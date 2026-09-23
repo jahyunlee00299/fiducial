@@ -1,0 +1,34 @@
+# Consumers add this to their .pre-commit-config.yaml:
+#
+#   - repo: https://github.com/jahyunlee00299/fiducial
+#     rev: v0.1.0
+#     hooks:
+#       - id: fiducial-names
+#       - id: fiducial-literals
+#         args: [--keys, "eta,kla_scale,xr_activity_scale"]
+#
+# `language: python` lets pre-commit build its own isolated env from this
+# repo's pyproject, so the hook does NOT depend on the interpreter that happens
+# to be on PATH. That mattered: a previous hook in this author's setup hard-coded
+# `python`, which on a machine where that name resolved elsewhere blocked EVERY
+# commit, including clean ones. A guard that blocks correct work gets disabled,
+# and a disabled guard protects nothing.
+
+- id: fiducial-literals
+  name: fiducial — measured keys must not be hard-coded or silently defaulted
+  description: >-
+    Flags `params.get("<key>", <number>)` and bare literal assignments for keys
+    declared to stand for measured quantities. Requires --keys.
+  entry: fiducial literals
+  language: python
+  types: [python]
+  require_serial: false
+
+- id: fiducial-names
+  name: fiducial — file names must not contradict their contents
+  description: >-
+    Flags a config whose file name carries a version token that disagrees with
+    the versions its own machine-read fields declare.
+  entry: fiducial names
+  language: python
+  files: \.(ya?ml|json)$

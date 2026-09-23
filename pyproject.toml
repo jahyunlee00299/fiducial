@@ -1,0 +1,45 @@
+[project]
+name = "fiducial"
+version = "0.1.0"
+description = "The reference mark a measurement is aligned against. Static checks for numbers that claim to be measured: bare literals with no provenance, names that contradict their contents, declared keys nothing asserts, documents that repeat a number wrongly, and index entries pointing at artefacts that are gone."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+fiducial = "fiducial.cli:main"
+
+# The plugin ships in the same package. pytest discovers it through this entry
+# point group with no conftest.py on the consumer's side -- installing
+# fiducial is the whole setup. It stays inert unless --fiducial-spec (or a
+# spec in [tool.fiducial]) names a declaration to check against, so a project
+# that installs fiducial for the CLI alone sees no change in its test runs.
+[project.entry-points.pytest11]
+fiducial = "fiducial.pytest_plugin"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["fiducial"]
+
+[tool.fiducial]
+# fiducial checks itself. Rules (1) and (3) need a project that DECLARES
+# measured quantities; this package has none of its own, so they are left out
+# rather than run vacuously -- which is the same judgement the rules make.
+# This repo's own workflow YAML carries no version token, so rule (2) reads it
+# and can compare nothing. That now exits 2 rather than 0 -- the fix this
+# dogfooding run produced -- so fiducial says out loud, about itself, that
+# the check is blind here. Accepted deliberately with the setting below, which
+# is exactly the decision every adopting project has to make in the open.
+#
+# Rules (1), (3) and (4) are absent rather than pointed at nothing: this
+# package declares no measured quantities of its own and no document here
+# derives its numbers from another, so running them would produce the vacuous
+# pass the rules exist to refuse.
+rules = ["names"]
+names_paths = [".github/"]
+names_allow_zero_comparable = true
+locales = ["en"]
