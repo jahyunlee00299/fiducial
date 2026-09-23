@@ -558,9 +558,21 @@ the four repositories this was built for, while `import pandas` appears in 382,
 and every rule here is static where pandera validates at runtime. The seam that
 actually reaches runtime is the pytest plugin below.
 
+There is one more boundary, on the other side. Before a number can be checked,
+the code holding it has to load at all — and "it does not install here" is a
+different answer from "it has no findings". [compat-check][cc] answers that
+one, with the same three exit codes and for the same reason: both `uv` and
+`pip` are fail-fast, so one broken requirement hides behind another, exactly
+as one stale glob hides a whole unscanned tree.
+
+The two do not depend on each other and are not a pipeline; they hold at
+different moments. [docs/FOUR_AXES.md](docs/FOUR_AXES.md) lays out where each
+gate sits, and what is still open between them.
+
 [dvc]: https://dvc.org/
 [pa]: https://pandera.readthedocs.io/
 [pr]: https://pytest-regressions.readthedocs.io/
+[cc]: https://github.com/jahyunlee00299/compat-check
 
 ## License
 
