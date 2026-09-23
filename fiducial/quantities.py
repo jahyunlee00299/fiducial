@@ -91,8 +91,63 @@ _UNIT_ALIASES = {
     "sec": "s", "secs": "s", "second": "s", "seconds": "s", "초": "s",
     "day": "d", "days": "d", "일": "d",
     "litre": "l", "liter": "l", "l": "l",
+    "litres": "l", "liters": "l",
     "percent": "%", "pct": "%", "퍼센트": "%",
-    "molar": "m",
+    # The molar ladder's spelled-out forms. Their symbols (`M`, `mM`, `µM`)
+    # are resolved earlier by `_CASE_SENSITIVE`, which is why these fold to
+    # the spelled-out name rather than to a symbol -- `molar` folding to `m`
+    # would put it back on the metre, which is the collision that started this.
+    "molar": "molar",
+    "millimolar": "millimolar",
+    "micromolar": "micromolar",
+    "nanomolar": "nanomolar",
+    "picomolar": "picomolar",
+    # Plurals and spelled-out names. Measured 260924 against the spellings a
+    # bioprocess document actually uses: 10 of 19 unit families did NOT fold
+    # to one form, and almost every gap was a plural (`grams`, `moles`) or a
+    # written-out name (`metre`, `pascal`). Both are how prose writes a unit
+    # that code writes as a symbol, which is exactly the pair rule (4)
+    # compares.
+    "gram": "g", "grams": "g", "gramme": "g", "grammes": "g",
+    "kilogram": "kg", "kilograms": "kg",
+    "milligram": "mg", "milligrams": "mg",
+    "microgram": "µg", "micrograms": "µg", "ug": "µg",
+    "mole": "mol", "moles": "mol",
+    "millimole": "mmol", "millimoles": "mmol",
+    "micromole": "µmol", "micromoles": "µmol", "umol": "µmol",
+    "metre": "m", "meter": "m", "metres": "m", "meters": "m",
+    "millimetre": "mm", "millimeter": "mm",
+    "millimetres": "mm", "millimeters": "mm",
+    "centimetre": "cm", "centimeter": "cm",
+    "pascal": "pa", "pascals": "pa",
+    "kilopascal": "kpa", "kilopascals": "kpa",
+    "bars": "bar",
+    "unit": "u", "units": "u",
+}
+
+
+#: Units where capitalisation IS the distinction, resolved before the token is
+#: lower-cased.
+#:
+#: Measured 260924: `48 mM` and `48 mm` compared equal, so rule (4) reported
+#: exit 0 on a document that had turned a concentration into a length -- the
+#: exact class of error the unit axis exists to catch. `M` is molar, `m` is
+#: metre, and the SI prefixes carry that difference down the whole ladder;
+#: lower-casing throws it away at the first step.
+#:
+#: Only the molar ladder is enumerated. Folding case is right for nearly every
+#: other unit a document writes -- `Hr`, `HR` and `hr` are one unit, and a
+#: blanket case-sensitive comparison would report those as mismatches. This is
+#: the exception, so it is listed rather than inferred.
+_CASE_SENSITIVE = {
+    "M": "molar",
+    "mM": "millimolar",
+    "µM": "micromolar",
+    "μM": "micromolar",
+    "uM": "micromolar",
+    "nM": "nanomolar",
+    "pM": "picomolar",
+    "fM": "femtomolar",
 }
 
 
@@ -101,6 +156,9 @@ def normalise_unit(unit: str | None) -> str | None:
 
     Only spelling is folded (``hr`` -> ``h``, ``degC`` -> ``°C``). Nothing is
     converted: ``min`` stays ``min`` and will not compare equal to ``h``.
+
+    Case is folded too, with one enumerated exception -- see
+    ``_CASE_SENSITIVE``.
     """
     if not unit:
         return None
@@ -108,6 +166,9 @@ def normalise_unit(unit: str | None) -> str | None:
     u = re.sub(r"\s+", "", u)
     if not u:
         return None
+    # Before lower-casing, because that is where the distinction is lost.
+    if u in _CASE_SENSITIVE:
+        return _CASE_SENSITIVE[u]
     low = u.lower()
     if low in _UNIT_STOP:
         return None
