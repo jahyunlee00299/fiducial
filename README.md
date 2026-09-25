@@ -466,8 +466,11 @@ and another on 3.13 is a defect that only surfaces on somebody else's machine.
 ## Install
 
 ```bash
-pip install fiducial
+pip install fiducial-check
 ```
+
+The distribution is `fiducial-check` (the `fiducial` name on PyPI belongs to an
+unrelated fiducial-marker toolkit); the import name is still `fiducial`.
 
 Stdlib only, Python ≥3.10, no dependencies.
 

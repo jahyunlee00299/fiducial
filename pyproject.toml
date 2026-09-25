@@ -1,5 +1,5 @@
 [project]
-name = "fiducial"
+name = "fiducial-check"
 version = "0.1.0"
 description = "The reference mark a measurement is aligned against. Static checks for numbers that claim to be measured: bare literals with no provenance, names that contradict their contents, declared keys nothing asserts, documents that repeat a number wrongly, and index entries pointing at artefacts that are gone."
 readme = "README.md"
