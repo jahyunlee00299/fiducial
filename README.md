@@ -1,4 +1,4 @@
-# fiducial
+# Fiducial
 
 *A fiducial is the reference mark a measurement is aligned against.*
 
@@ -32,7 +32,7 @@ fiducial names: 1 violation(s) among 127 comparable file(s) (231 scanned, mode=s
 
 ## The five rules
 
-**rule ① `literals`** — a key you have *declared* to be measured must not appear
+**rule ① `literals`**: a key you have *declared* to be measured must not appear
 as a hard-coded number, and must not be fetched with a silent default:
 
 ```python
@@ -40,10 +40,10 @@ eta = params.get("eta", 0.87)   # missing key -> a wrong fit, not a failure
 model.kla_scale = 0.776         # measured where? by whom? against what?
 ```
 
-**rule ② `names`** — a file name that carries a version token must not
+**rule ② `names`**: a file name that carries a version token must not
 contradict the versions the file's own machine-read fields declare.
 
-**rule ③ `coverage`** — a key the project *declares* measured must have some
+**rule ③ `coverage`**: a key the project *declares* measured must have some
 test that asserts something about it. Rules ① and ② ask whether a number is
 shaped wrongly; this one catches the parameter that is plumbed correctly and
 tested by nobody, where the suite stays green because the assertion that would
@@ -56,9 +56,9 @@ appear anywhere in the test tree. Nothing checks it, and nothing will notice
 when it changes.
 ```
 
-**rule ④ `docs`** — a document that repeats a number from another document must
+**rule ④ `docs`**: a document that repeats a number from another document must
 not state a value that contradicts it. Rules ①–③ all watch code; this one covers
-the layer where the same drift kept landing unwatched — the PFD, the design
+the layer where the same drift kept landing unwatched: the PFD, the design
 note, the spec summary that quietly carries last month's pH.
 
 ```
@@ -93,12 +93,12 @@ the upstream label after `as`:
 Values are read from prose, from row-oriented table cells (`| 반응 시간 | 24 h |`),
 and from inside bold, inline code and mermaid node labels. A quantity whose
 label is missing from *either* side is reported as a gap rather than counted
-clean — a declaration that compares nothing produces the same `0 violations`
+clean: a declaration that compares nothing produces the same `0 violations`
 line as one that agrees, and the difference is the entire question. `--strict-gaps`
 makes gaps block.
 
 Only declared quantities are compared; the rest of the prose is left alone. The
-alternative — scanning every document for every number and grouping by label —
+alternative (scanning every document for every number and grouping by label)
 was tried on a 54-document research corpus and drowns: the same figure appears
 legitimately as prior art (`CN101904484A uses pH 5.0`), as a retracted value,
 and as a target distinct from an operating point. Ranges (`pH 4~8`) are skipped
@@ -106,7 +106,7 @@ for the same reason: a band is not an operating point, and on the reference
 corpus reading its lower bound as a value produced 2 findings out of 2, both
 wrong.
 
-**rule ⑤ `pointers`** — an index that registers artefacts must not name ones
+**rule ⑤ `pointers`**: an index that registers artefacts must not name ones
 that are not there. Rules ①–④ ask whether a number is trustworthy; this one
 asks whether the artefact it came from can still be found.
 
@@ -123,7 +123,7 @@ models/params/param_registry.json: 118 of 303 pointers broken
 
 Two pointer kinds are resolved: a `file` field against the filesystem, and a
 `parent_id` against the other entries in the same index. Both are the same
-defect — a reference whose target does not exist — and splitting them across
+defect (a reference whose target does not exist), and splitting them across
 two tools would mean reading one file twice to ask one question.
 
 The report separates what a tool can fix from what a person must decide, and
@@ -163,7 +163,7 @@ That is a real case: the value was corrected in the code and three test files
 still assert against the old one.
 
 **The first version of this ran at 1 real finding in 20.** An adversarial audit
-read every flagged site and refuted nineteen — the corpus was 93% test
+read every flagged site and refuted nineteen. The corpus was 93% test
 fixtures, and fixtures disagree by design (`10x` monotonicity probes, `2x`
 scenario variants, per-test dicts of round numbers), while a ninth value under
 `titer` turned out to be eight unrelated packages sharing a generic name. So
@@ -171,7 +171,7 @@ the comparison is anchored: a conflict needs a value in non-test **code**, and
 that is what the fixtures are compared against; keys are bucketed per package.
 Twenty findings became five, and the real one survived.
 
-It still cannot separate a stale fixture from a deliberate one — on that corpus
+It still cannot separate a stale fixture from a deliberate one: on that corpus
 three keys are identical on every structural signal and one of them is the
 defect. The finding is therefore always `needs_review` and never carries a
 fix: proposing an edit would ask an agent to overwrite a test doing its job.
@@ -179,7 +179,7 @@ fix: proposing an edit would ask an agent to overwrite a test doing its job.
 ### YAML indexes
 
 Rule ⑤ reads `.yaml` and `.yml` as well as `.json`, with a block-subset reader
-rather than a dependency — a list container (`problems:`), keys ending
+rather than a dependency: a list container (`problems:`), keys ending
 `_file`/`_files`, and a value that is a list of filenames are all resolved.
 
 Checked against the 35 [PEtab benchmark models][petab]: 180 pointers, and one
@@ -213,8 +213,8 @@ them on for a codebase whose constructors take measured values directly, like
 
 Where this departs from its neighbours: [drift-linter][dl] and
 [scicode-lint][sl]'s `rep-003` both classify `dict.get(key, default)` as the
-*safe* form — absence is handled, so the code is fine. Against a declared
-measured key fiducial inverts that judgement. The default **is** the defect,
+*safe* form. Absence is handled, so the code is fine. Against a declared
+measured key Fiducial inverts that judgement. The default **is** the defect,
 because it suppresses the loud failure that would have surfaced the missing
 measurement. The inversion is the contribution; the AST walk is not novel, and a
 `semgrep` `metavariable-regex` rule expresses much of the same matching.
@@ -231,7 +231,7 @@ measurement. The inversion is the contribution; the AST walk is not novel, and a
 ```
 
 Exit `2` covers an empty `--keys`, zero matched files, unparseable source, an
-index carrying no resolvable pointer, and — for rule ② — files read of which
+index carrying no resolvable pointer, and (for rule ②) files read of which
 none were comparable.
 This package exists because a scanner whose path globs had gone stale printed
 `OK — no violations across 0 file(s)` and exited `0` for long enough that
@@ -244,7 +244,7 @@ happened* rather than accepting a green suite.
 
 ## When the caller is an agent
 
-A person who sets parameters by hand rarely needs this checker — they already
+A person who sets parameters by hand rarely needs this checker: they already
 know where their numbers came from. A model writing the code does not, and
 `params.get("eta", 0.87)` is exactly what one does when it needs a number it
 does not have. The rules matter most when nobody human chose the value.
@@ -286,7 +286,7 @@ independent, and rule ⑤ is the proof:
 
 All three violations are equally certain. What differs is who may act, so a
 single severity ladder would have to rank cases that do not differ in severity
-at all — and an agent reading one number would fill in a path for the case that
+at all, and an agent reading one number would fill in a path for the case that
 has no answer.
 
 Rule ② runs the other way: its base rate is 1.6%, so it is `needs_review` even
@@ -303,14 +303,14 @@ Across the five, what an agent may do differs by what the rule can know:
 | ⑤ `pointers` | depends | see the table above |
 
 Rules ① and ③ deliberately emit no `fix` at all. An agent *can* write a test or
-track down a source, and the `action` text says so — but that is authorship,
+track down a source, and the `action` text says so, but that is authorship,
 and it must not arrive through the same field as a mechanical edit.
 
 The vocabulary is borrowed rather than invented. `applicability: safe | unsafe`
 is Ruff's, measured from `ruff check --output-format=json` rather than read
 from its docs; `apply: auto | suggest_only` is ESLint's split between a fix it
 applies and a suggestion it only offers. `message` is the rule's own prose,
-unchanged — an agent deciding what to do needs the reasoning as much as a
+unchanged: an agent deciding what to do needs the reasoning as much as a
 person does.
 
 `"fix" in finding` answers "is this automatable at all", and
@@ -319,7 +319,7 @@ Nothing has to be parsed out of prose.
 
 **Not SARIF, deliberately.** SARIF's `level` has no value for *the check could
 not run*, and `kind: notApplicable` means "did not apply here" rather than
-"should have been checked and was not" — which is this package's entire
+"should have been checked and was not", which is this package's entire
 argument. Its `fixes[]` carries no safety grade either, so both fields that
 matter here would land in non-standard `properties`. A five-rule tool does not
 need a multi-level envelope to say that.
@@ -337,12 +337,12 @@ Against the corpus the rules were derived from (1,522 Python files, 231 YAML):
 
 **Quote the denominator.** The base rate is low: this is a real defect class,
 not a widespread one. `strict` requires the name and contents to share no
-version at all; `set` also catches partial-overlap lies — one archived file is
+version at all; `set` also catches partial-overlap lies: one archived file is
 named `v8_v3` while its `fit_json` is `v8_v4`, and its own comment admits
 "legacy name only". `set` is the default because that extra case was real and
 cost nothing in noise on this corpus.
 
-For rule ①, 575 of 705 raw hits (82%) defaulted to exactly `0.0` or `1.0` —
+For rule ①, 575 of 705 raw hits (82%) defaulted to exactly `0.0` or `1.0`:
 `setdefault("vmax_futile_nadph", 0.0)` is a term switched off, not a fabricated
 measurement. Those are split out by default and returned by `--include-neutral`,
 because "the term was off and nobody noticed" is a real failure mode too, just a
@@ -350,7 +350,7 @@ different one.
 
 ## Adopting it in a new repo
 
-Everything below is optional — the subcommands still take explicit flags. But
+Everything below is optional. The subcommands still take explicit flags. But
 a project that writes this once stops re-arguing it on every invocation:
 
 ```toml
@@ -380,7 +380,7 @@ $ fiducial check
 `2`, even when another rule found violations. "Could not check" outranks
 "checked and found things", because a partial scan reported as a result is the
 failure this package exists to refuse. A `check` that would run *no* rule is
-itself exit `2` — a config naming nothing produces the same reassuring silence
+itself exit `2`: a config naming nothing produces the same reassuring silence
 as a clean repo.
 
 A project with no `pyproject.toml` can use a standalone `.fiducial.toml`
@@ -392,7 +392,7 @@ holding the same keys without the `[tool.fiducial]` header.
 
 The rules were measured on one corpus, and the corpus shows in the defaults:
 which config fields declare a file's own version, which are prose, which
-defaults mean "this term is switched off". Each is exposed twice —
+defaults mean "this term is switched off". Each is exposed twice:
 
 ```toml
 self_declaring_keys        = ["fit_ref"]   # replace the default outright
@@ -405,7 +405,7 @@ the six that were there. The pairs are `self_declaring_keys`, `prose_keys` and
 `reference_keys` (rule ②), plus `neutral_defaults` (rule ①) and
 `extend_history_markers` (rule ④).
 
-A misspelled setting is **reported, not ignored** — it would otherwise leave
+A misspelled setting is **reported, not ignored**: it would otherwise leave
 the default in force while the author believes they changed it, which is the
 same silent miscalibration the rules themselves are about.
 
@@ -426,7 +426,7 @@ text would be scanned with the wrong patterns while the config said otherwise.
 
 ### pytest
 
-Installing fiducial also installs a pytest plugin. It stays silent unless you
+Installing Fiducial also installs a pytest plugin. It stays silent unless you
 name a spec:
 
 ```
@@ -492,7 +492,7 @@ guard that blocks correct work gets disabled, and a disabled guard protects
 nothing.
 
 That path is exercised by `tests/test_precommit_framework.py` rather than
-assumed — pre-commit builds the venv, blocks a violating repo, and passes a
+assumed: pre-commit builds the venv, blocks a violating repo, and passes a
 clean one. It had sat in this repo as "declared, unproven" for exactly as long
 as it took someone to run it.
 
@@ -517,7 +517,7 @@ physical consequence rather than the value itself.
 
 Each round shrank the false-gap band without closing it. So a `mentioned-only`
 verdict means **"no gate found by the patterns implemented here"**, not "no
-gate". Only `absent` — the key appears nowhere in the test tree at all — is
+gate". Only `absent`, the key appears nowhere in the test tree at all, is
 wired to block.
 
 The error runs both ways, and the other direction is worse. In that same corpus
@@ -525,17 +525,17 @@ three parameters are set by a test that asserts `rate == 0` at a manufactured
 equilibrium, where the rate's numerator is structurally zero and those three
 appear only in the denominator: the assertion holds whatever they are. A gate
 that cannot fail, wearing the shape of one. Widening the patterns until such a
-key counts as `asserted` would trade a false gap — which costs someone an
-afternoon — for a false gate, which costs the thing the gate was for.
+key counts as `asserted` would trade a false gap (which costs someone an
+afternoon) for a false gate, which costs the thing the gate was for.
 
 Whether an assertion is actually sensitive to a parameter is mutation testing's
-question, and mutation testing answers it by running the suite. fiducial does
+question, and mutation testing answers it by running the suite. Fiducial does
 not attempt it.
 
 ## What rule (4) does not tell you
 
 It compares a copy against the original; it does not check that the original is
-right. And it reads one hop only — if A declares B and B declares C, A is
+right. And it reads one hop only: if A declares B and B declares C, A is
 checked against B alone.
 
 Two shapes are invisible to it. A column-oriented table, where the label sits in
@@ -550,7 +550,7 @@ and the only defence is to say so out loud.
 
 ## Scope
 
-fiducial does not version data (use [DVC][dvc]), validate dataframes (use
+Fiducial does not version data (use [DVC][dvc]), validate dataframes (use
 [pandera][pa]), or pin regression baselines (use [pytest-regressions][pr]). It
 asks one question those tools leave open: **is this number allowed to be here at
 all?**
@@ -562,7 +562,7 @@ and every rule here is static where pandera validates at runtime. The seam that
 actually reaches runtime is the pytest plugin below.
 
 There is one more boundary, on the other side. Before a number can be checked,
-the code holding it has to load at all — and "it does not install here" is a
+the code holding it has to load at all, and "it does not install here" is a
 different answer from "it has no findings". [compat-check][cc] answers that
 one, with the same three exit codes and for the same reason: both `uv` and
 `pip` are fail-fast, so one broken requirement hides behind another, exactly
