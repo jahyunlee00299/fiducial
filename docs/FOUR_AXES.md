@@ -5,8 +5,7 @@ result, does the thing it rests on actually hold?**
 
 ```
 ① environment      ② data            ③ parameters      ④ results
-compat-check       (open)            fiducial          pytest-regressions
-                                                       syrupy, etc.
+compat-check       provenance-check  fiducial          regress-check
 
 "will it even     "which dataset    "where did this   "does it come out
  install here"     produced this     number come        the same way
@@ -25,13 +24,13 @@ in the wrong place.
 adopting a dependency ─── compat-check ─────────────── once, at decision time
        │
        ▼
- data lands / recalibrates ── (axis ② ) ─────────────── when the data changes
+ data lands / recalibrates ── provenance-check ───────── when the data changes
        │
        ▼
    every commit ───────── fiducial (pre-commit) ─────── continuously
        │
        ▼
-   every test run ─────── pytest-regressions ────────── continuously
+   every test run ─────── regress-check ─────────────── continuously
 ```
 
 `compat-check` takes an *external* target as an argument (`compat-check
@@ -109,18 +108,26 @@ meant nothing at all.
 
 ### ③ → ④ : a number that changed, and a result that did not
 
-`pytest-regressions` freezes an output and fails when it moves.
-`fiducial` explains *why* it moved. Run in the other order and a regression
-diff is a mystery; run this way and it has a cause:
+`regress-check` freezes the numbers a model already wrote and fails when one
+moves beyond its declared tolerance. `fiducial` and `provenance-check` explain
+*why* it moved. Run in the other order and a regression diff is a mystery; run
+this way and it has a cause. With the sibling tools named in the registry,
+`regress-check check --explain` runs them only on failure and appends their
+output (real run, `k_17` pasted into a params file as 44.0):
 
 ```
-pytest-regressions:  "MPSP moved 3.17%"
-fiducial --conflicts: "k_17 is 0.1077 in the model and 44.0 in three fixtures"
+[moved] (certain) mpsp moved: expected 3.17, actual 3.27 (delta +0.1, +3.155%); ...
+--- explain: python -m provenance_check check provenance.toml (exit 1) ---
+[range-violation] ... k_17: value in use ... 44.0 is outside valid_range [0.05, 0.5]
+[value-drift]     ... k_17: value in use is 44.0, declared/sourced value is 0.1077
 ```
 
-Neither tool can produce the other's half.
+Neither tool can produce the other's half. `regress-check` does not run the
+model, and it does not replace `pytest-regressions` or `syrupy` for snapshotting
+whole files; it compares scalars, keeps a reasoned freeze history, and treats a
+widened tolerance as a violation until it is re-frozen with a reason.
 
-### ② : the axis that is open
+### ② : the data axis
 
 The gap is not data *validation* — pandera and Great Expectations check values,
 DVC versions files, and both are mature. The gap is the **binding between a
@@ -131,7 +138,14 @@ that claims "this parameter came from that fit file" is checkable, and on one
 research registry **88 of 152 entries did not resolve**. What is missing is the
 other half — a calibration constant carrying its measurement date, instrument,
 raw-data link and valid range, so that "this slope came from that run" is a
-claim a tool can refuse.
+claim a tool can refuse. `provenance-check` is that half: a `provenance.toml`
+declares each constant with a hash-pinned source, `measured_at`, `instrument`,
+an optional `valid_range` and the file:key where the value is actually used, and
+it fails on a missing or altered source, a value in use that differs from the
+sourced one, a value outside its calibrated range, and any key listed as
+`expect` that has no declaration. It hashes and never reads mtime. What stays
+open is dataset *validation* itself (pandera, Great Expectations) and file
+versioning (DVC) — deliberately not rebuilt here.
 
 A measured case, from an instrument-analysis repo: a `StandardCurve` accepts a
 pre-fitted slope and intercept pasted straight into YAML, defaults `r2` to 1.0,
@@ -145,8 +159,9 @@ area into a concentration.
 
 It is not one package. The axes differ in maturity, in competition and in
 audience, and merging them would force the mature ones to move at the pace of
-the open one. `compat-check` and `fiducial` ship separately, on separate
-release cycles, and neither imports the other.
+the fastest one. `compat-check`, `provenance-check`, `fiducial` and
+`regress-check` ship separately, on separate release cycles, and none imports
+another.
 
 What they share is the exit contract and the sentence at the top of this file.
 That is enough to compose them in a shell script, a CI job or an agent's
