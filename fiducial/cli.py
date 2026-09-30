@@ -945,9 +945,17 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return args.func(args)
+
+
+def main(argv: list[str] | None = None) -> int:
+    rc = _run(argv)
+    from . import __version__, _update_notice
+
+    _update_notice.notify("fiducial-check", __version__)
+    return rc
 
 
 if __name__ == "__main__":
