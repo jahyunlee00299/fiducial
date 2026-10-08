@@ -115,3 +115,29 @@ def test_the_spelled_out_molar_forms_do_not_land_on_metre() -> None:
     assert Q.normalise_unit("millimolar") == Q.normalise_unit("mM")
     assert Q.normalise_unit("micromolar") == Q.normalise_unit("µM")
     assert Q.normalise_unit("molar") != Q.normalise_unit("m")
+
+
+def test_prose_spellings_cover_volume_and_nano():
+    """Written-out names fold onto the symbol code uses (the same class as the gram/metre fold)."""
+    families = [
+        ("ml", "milliliter", "millilitres"),
+        ("µl", "ul", "microliter", "microlitres"),
+        ("km", "kilometre", "kilometers"),
+        ("nm", "nanometer", "nanometres"),
+        ("ng", "nanograms"),
+        ("nmol", "nanomoles"),
+        ("w", "watts"),
+        ("kw", "kilowatt"),
+        ("v", "volts"),
+        ("da", "daltons"),
+        ("kda", "kilodalton"),
+    ]
+    for fam in families:
+        folded = {Q.normalise_unit(x) for x in fam}
+        assert len(folded) == 1, (fam, folded)
+
+
+def test_new_aliases_do_not_convert_between_units():
+    assert Q.normalise_unit("ml") != Q.normalise_unit("l")
+    assert Q.normalise_unit("nm") != Q.normalise_unit("mm")
+    assert Q.normalise_unit("kda") != Q.normalise_unit("da")

@@ -123,6 +123,17 @@ _UNIT_ALIASES = {
     "kilopascal": "kpa", "kilopascals": "kpa",
     "bars": "bar",
     "unit": "u", "units": "u",
+    # Same gap as above, found by replaying the history episode that introduced it: the
+    # families below still did not fold (measured 261008, 12 of 29 probed families split).
+    "milliliter": "ml", "milliliters": "ml", "millilitre": "ml", "millilitres": "ml",
+    "microliter": "µl", "microliters": "µl", "microlitre": "µl", "microlitres": "µl", "ul": "µl",
+    "kilometre": "km", "kilometer": "km", "kilometres": "km", "kilometers": "km",
+    "nanometre": "nm", "nanometer": "nm", "nanometres": "nm", "nanometers": "nm",
+    "nanogram": "ng", "nanograms": "ng",
+    "nanomole": "nmol", "nanomoles": "nmol",
+    "watt": "w", "watts": "w", "kilowatt": "kw", "kilowatts": "kw",
+    "volt": "v", "volts": "v",
+    "dalton": "da", "daltons": "da", "kilodalton": "kda", "kilodaltons": "kda",
 }
 
 
