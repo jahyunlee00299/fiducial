@@ -305,8 +305,69 @@ class _Visitor(ast.NodeVisitor):
                     neutral=default in self.neutral_defaults,
                     value=default,
                 )
+        self._attribute_access(node)
+        self._cli_default(node)
         self._keywords(node)
         self.generic_visit(node)
+
+    # getattr(cfg, "eta", 0.87) / setattr(cfg, "eta", 0.87)
+    def _attribute_access(self, node: ast.Call) -> None:
+        # `getattr` with a third argument is `.get` for objects: the same
+        # silent fallback, spelled for a config object instead of a dict.
+        # `setattr` writes the literal under a string key, which is the
+        # `params["eta"] = 0.87` shape without the subscript.
+        func = node.func
+        if not isinstance(func, ast.Name) or len(node.args) != 3:
+            return
+        if func.id not in {"getattr", "setattr"}:
+            return
+        key = _const_str(node.args[1])
+        val = _literal(node.args[2])
+        if not self.keys(key) or val is None:
+            return
+        if func.id == "getattr":
+            self._record(
+                node, key, "silent_fallback",
+                neutral=val in self.neutral_defaults, value=val,
+            )
+        elif not (
+            val in _ALWAYS_UNREMARKABLE
+            or (val in _UNREMARKABLE and not self.keys.named_exactly(key))
+        ):
+            self._record(node, key, "bare_literal", value=val)
+
+    # parser.add_argument("--eta", type=float, default=0.87)
+    def _cli_default(self, node: ast.Call) -> None:
+        # A command-line default is a signature default for the whole script:
+        # leave the flag off and the run proceeds on a number nobody measured.
+        # Research scripts carry their tuned constants here more often than in
+        # any function signature. The parameter's name is the `dest=` when
+        # given, otherwise the option string without its dashes, with the
+        # remaining `-` read as `_` (argparse does the same).
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "add_argument"):
+            return
+        default = next((kw.value for kw in node.keywords if kw.arg == "default"), None)
+        val = None if default is None else _literal(default)
+        if val is None:
+            return
+        dest = next(
+            (_const_str(kw.value) for kw in node.keywords if kw.arg == "dest"), None
+        )
+        if dest:
+            names = [dest]
+        else:
+            names = [
+                text.lstrip("-").replace("-", "_")
+                for text in map(_const_str, node.args)
+                if text
+            ]
+        key = next((n for n in names if self.keys(n)), None)
+        if key is not None:
+            self._record(
+                default, key, "silent_fallback",
+                neutral=val in self.neutral_defaults, value=val,
+            )
 
     # eta = 1.0   /   self.eta = 1.0   /   eta: float = 1.0
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -324,6 +385,9 @@ class _Visitor(ast.NodeVisitor):
     def _assignment(
         self, targets: Iterable[ast.AST], value: ast.AST, node: ast.AST
     ) -> None:
+        for t in targets:
+            if isinstance(t, (ast.Tuple, ast.List)):
+                self._unpack(t, value, node)
         val = _literal(value)
         if val is None:
             return
@@ -336,6 +400,30 @@ class _Visitor(ast.NodeVisitor):
             ):
                 continue
             self._record(node, name, "bare_literal", value=val)
+
+    def _unpack(self, target: ast.AST, value: ast.AST, node: ast.AST) -> None:
+        # `k_f, eta = 3.2, 0.87`: each name is paired with the element at its
+        # position, so the pair is judged like `eta = 0.87`. Only a plain
+        # same-length tuple on the right is read; a starred target or a call
+        # on the right says nothing about which value lands where.
+        if not isinstance(value, (ast.Tuple, ast.List)):
+            return
+        if len(target.elts) != len(value.elts) or any(
+            isinstance(e, ast.Starred) for e in (*target.elts, *value.elts)
+        ):
+            return
+        for t, v in zip(target.elts, value.elts):
+            if isinstance(t, (ast.Tuple, ast.List)):
+                self._unpack(t, v, node)
+                continue
+            name, val = _target_name(t), _literal(v)
+            if not self.keys(name) or val is None:
+                continue
+            if val in _ALWAYS_UNREMARKABLE or (
+                val in _UNREMARKABLE and not self.keys.named_exactly(name)
+            ):
+                continue
+            self._record(v, name, "bare_literal", value=val)
 
     # --- shapes a foreign project stores parameters in -------------------
     # The rule began on one codebase whose parameters are module names and

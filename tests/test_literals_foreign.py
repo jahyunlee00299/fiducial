@@ -125,3 +125,123 @@ def test_call_keywords_are_opt_in():
 
 def test_dict_call_is_always_the_projects_mapping():
     assert shape(scan("p = dict(eta=0.87)\n")) == [("bare_literal", "eta")]
+
+
+# --------------------------------------------------------------------------
+# getattr / setattr: the attribute-access spellings of .get and subscript
+# --------------------------------------------------------------------------
+
+def test_getattr_default_is_a_silent_fallback():
+    assert shape(scan("x = getattr(cfg, 'eta', 0.87)\n")) == [
+        ("silent_fallback", "eta")]
+
+
+def test_getattr_neutral_default_is_split_out():
+    src = "x = getattr(cfg, 'eta', 1.0)\n"
+    assert scan(src) == []
+    found = scan(src, include_neutral=True)
+    assert len(found) == 1 and found[0].neutral
+
+
+def test_getattr_without_default_or_with_a_name_is_clean():
+    assert scan("x = getattr(cfg, 'eta')\n") == []
+    assert scan("x = getattr(cfg, 'eta', fallback)\n") == []
+    assert scan("x = getattr(cfg, name, 0.87)\n") == []
+    assert scan("x = getattr(cfg, 'other', 0.87)\n") == []
+
+
+def test_setattr_literal_is_a_bare_literal():
+    assert shape(scan("setattr(cfg, 'eta', 0.87)\n")) == [
+        ("bare_literal", "eta")]
+
+
+def test_setattr_follows_the_unremarkable_rule():
+    # 0 and 1 are always exempt; 2 only when the key came from a pattern
+    assert scan("setattr(cfg, 'eta', 1)\n") == []
+    assert scan("setattr(cfg, 'k_17', 2)\n", keys=("k_*",)) == []
+    assert shape(scan("setattr(cfg, 'eta', 2)\n")) == [("bare_literal", "eta")]
+
+
+def test_setattr_on_a_name_or_a_method_named_getattr_is_clean():
+    assert scan("setattr(cfg, 'eta', measured)\n") == []
+    assert scan("obj.getattr(cfg, 'eta', 0.87)\n") == []
+
+
+# --------------------------------------------------------------------------
+# argparse: a command-line default is a signature default for the script
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("src", [
+    "p.add_argument('--eta', type=float, default=0.87)\n",
+    "p.add_argument('-e', '--eta', default=0.87)\n",
+    "p.add_argument('eta', nargs='?', default=0.87)\n",
+    "p.add_argument('--eta-scale', dest='eta', default=0.87)\n",
+])
+def test_argparse_default_is_a_silent_fallback(src):
+    found = scan(src)
+    assert shape(found) == [("silent_fallback", "eta")]
+    assert found[0].value == 0.87
+
+
+def test_argparse_dashes_read_as_underscores():
+    src = "p.add_argument('--kla-scale', default=2.7)\n"
+    assert shape(scan(src, keys=("kla_scale",))) == [
+        ("silent_fallback", "kla_scale")]
+
+
+def test_argparse_dest_wins_over_the_option_string():
+    src = "p.add_argument('--eta', dest='other', default=0.87)\n"
+    assert scan(src) == []
+
+
+def test_argparse_without_a_literal_default_is_clean():
+    assert scan("p.add_argument('--eta', type=float, required=True)\n") == []
+    assert scan("p.add_argument('--eta', default=load_eta())\n") == []
+    assert scan("p.add_argument('--eta', default=argparse.SUPPRESS)\n") == []
+    assert scan("p.add_argument('--other', default=0.87)\n") == []
+
+
+def test_argparse_neutral_default_is_split_out():
+    src = "p.add_argument('--eta', default=1.0)\n"
+    assert scan(src) == []
+    assert len(scan(src, include_neutral=True)) == 1
+
+
+def test_argparse_default_on_a_non_method_call_is_clean():
+    assert scan("add_argument('--eta', default=0.87)\n") == []
+
+
+# --------------------------------------------------------------------------
+# tuple unpacking: each name is paired with the element at its position
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("src, line_col", [
+    ("a, eta = 3.2, 0.87\n", (1, 14)),
+    ("[a, eta] = [3.2, 0.87]\n", (1, 17)),
+    ("a, (b, eta) = 3.2, (4.1, 0.87)\n", (1, 25)),
+    ("self.a, self.eta = 3.2, 0.87\n", (1, 24)),
+])
+def test_unpacked_literal_is_a_bare_literal(src, line_col):
+    found = scan(src)
+    assert shape(found) == [("bare_literal", "eta")]
+    assert found[0].value == 0.87
+    assert (found[0].line, found[0].col) == line_col
+
+
+def test_unpacking_pairs_by_position_not_by_name():
+    # the declared name sits first, so 3.2 is its value, not 0.87
+    found = scan("eta, a = 3.2, 0.87\n")
+    assert [f.value for f in found] == [3.2]
+
+
+def test_unpacking_a_call_or_a_starred_target_is_clean():
+    assert scan("a, eta = fit(data)\n") == []
+    assert shape(scan("a, eta = load(), 0.87\n")) == [("bare_literal", "eta")]
+    assert scan("*a, eta = 3.2, 0.87\n") == []
+    assert scan("a, eta = 3.2, 0.87, 0.5\n") == []        # length mismatch: nothing to pair
+
+
+def test_unpacked_unremarkable_values_follow_the_same_rule():
+    assert scan("a, eta = 3.2, 1\n") == []
+    assert scan("a, k_17 = 3.2, 2\n", keys=("k_*",)) == []
+    assert shape(scan("a, eta = 3.2, 2\n")) == [("bare_literal", "eta")]
