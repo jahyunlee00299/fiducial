@@ -209,3 +209,39 @@ def test_argparse_neutral_default_is_split_out():
 
 def test_argparse_default_on_a_non_method_call_is_clean():
     assert scan("add_argument('--eta', default=0.87)\n") == []
+
+
+# --------------------------------------------------------------------------
+# tuple unpacking: each name is paired with the element at its position
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("src, line_col", [
+    ("a, eta = 3.2, 0.87\n", (1, 14)),
+    ("[a, eta] = [3.2, 0.87]\n", (1, 17)),
+    ("a, (b, eta) = 3.2, (4.1, 0.87)\n", (1, 25)),
+    ("self.a, self.eta = 3.2, 0.87\n", (1, 24)),
+])
+def test_unpacked_literal_is_a_bare_literal(src, line_col):
+    found = scan(src)
+    assert shape(found) == [("bare_literal", "eta")]
+    assert found[0].value == 0.87
+    assert (found[0].line, found[0].col) == line_col
+
+
+def test_unpacking_pairs_by_position_not_by_name():
+    # the declared name sits first, so 3.2 is its value, not 0.87
+    found = scan("eta, a = 3.2, 0.87\n")
+    assert [f.value for f in found] == [3.2]
+
+
+def test_unpacking_a_call_or_a_starred_target_is_clean():
+    assert scan("a, eta = fit(data)\n") == []
+    assert shape(scan("a, eta = load(), 0.87\n")) == [("bare_literal", "eta")]
+    assert scan("*a, eta = 3.2, 0.87\n") == []
+    assert scan("a, eta = 3.2, 0.87, 0.5\n") == []        # length mismatch: nothing to pair
+
+
+def test_unpacked_unremarkable_values_follow_the_same_rule():
+    assert scan("a, eta = 3.2, 1\n") == []
+    assert scan("a, k_17 = 3.2, 2\n", keys=("k_*",)) == []
+    assert shape(scan("a, eta = 3.2, 2\n")) == [("bare_literal", "eta")]

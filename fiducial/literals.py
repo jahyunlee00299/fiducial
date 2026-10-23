@@ -385,6 +385,9 @@ class _Visitor(ast.NodeVisitor):
     def _assignment(
         self, targets: Iterable[ast.AST], value: ast.AST, node: ast.AST
     ) -> None:
+        for t in targets:
+            if isinstance(t, (ast.Tuple, ast.List)):
+                self._unpack(t, value, node)
         val = _literal(value)
         if val is None:
             return
@@ -397,6 +400,30 @@ class _Visitor(ast.NodeVisitor):
             ):
                 continue
             self._record(node, name, "bare_literal", value=val)
+
+    def _unpack(self, target: ast.AST, value: ast.AST, node: ast.AST) -> None:
+        # `k_f, eta = 3.2, 0.87`: each name is paired with the element at its
+        # position, so the pair is judged like `eta = 0.87`. Only a plain
+        # same-length tuple on the right is read; a starred target or a call
+        # on the right says nothing about which value lands where.
+        if not isinstance(value, (ast.Tuple, ast.List)):
+            return
+        if len(target.elts) != len(value.elts) or any(
+            isinstance(e, ast.Starred) for e in (*target.elts, *value.elts)
+        ):
+            return
+        for t, v in zip(target.elts, value.elts):
+            if isinstance(t, (ast.Tuple, ast.List)):
+                self._unpack(t, v, node)
+                continue
+            name, val = _target_name(t), _literal(v)
+            if not self.keys(name) or val is None:
+                continue
+            if val in _ALWAYS_UNREMARKABLE or (
+                val in _UNREMARKABLE and not self.keys.named_exactly(name)
+            ):
+                continue
+            self._record(v, name, "bare_literal", value=val)
 
     # --- shapes a foreign project stores parameters in -------------------
     # The rule began on one codebase whose parameters are module names and
