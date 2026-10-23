@@ -306,6 +306,7 @@ class _Visitor(ast.NodeVisitor):
                     value=default,
                 )
         self._attribute_access(node)
+        self._cli_default(node)
         self._keywords(node)
         self.generic_visit(node)
 
@@ -334,6 +335,39 @@ class _Visitor(ast.NodeVisitor):
             or (val in _UNREMARKABLE and not self.keys.named_exactly(key))
         ):
             self._record(node, key, "bare_literal", value=val)
+
+    # parser.add_argument("--eta", type=float, default=0.87)
+    def _cli_default(self, node: ast.Call) -> None:
+        # A command-line default is a signature default for the whole script:
+        # leave the flag off and the run proceeds on a number nobody measured.
+        # Research scripts carry their tuned constants here more often than in
+        # any function signature. The parameter's name is the `dest=` when
+        # given, otherwise the option string without its dashes, with the
+        # remaining `-` read as `_` (argparse does the same).
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "add_argument"):
+            return
+        default = next((kw.value for kw in node.keywords if kw.arg == "default"), None)
+        val = None if default is None else _literal(default)
+        if val is None:
+            return
+        dest = next(
+            (_const_str(kw.value) for kw in node.keywords if kw.arg == "dest"), None
+        )
+        if dest:
+            names = [dest]
+        else:
+            names = [
+                text.lstrip("-").replace("-", "_")
+                for text in map(_const_str, node.args)
+                if text
+            ]
+        key = next((n for n in names if self.keys(n)), None)
+        if key is not None:
+            self._record(
+                default, key, "silent_fallback",
+                neutral=val in self.neutral_defaults, value=val,
+            )
 
     # eta = 1.0   /   self.eta = 1.0   /   eta: float = 1.0
     def visit_Assign(self, node: ast.Assign) -> None:

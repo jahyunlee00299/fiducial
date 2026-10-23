@@ -165,3 +165,47 @@ def test_setattr_follows_the_unremarkable_rule():
 def test_setattr_on_a_name_or_a_method_named_getattr_is_clean():
     assert scan("setattr(cfg, 'eta', measured)\n") == []
     assert scan("obj.getattr(cfg, 'eta', 0.87)\n") == []
+
+
+# --------------------------------------------------------------------------
+# argparse: a command-line default is a signature default for the script
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("src", [
+    "p.add_argument('--eta', type=float, default=0.87)\n",
+    "p.add_argument('-e', '--eta', default=0.87)\n",
+    "p.add_argument('eta', nargs='?', default=0.87)\n",
+    "p.add_argument('--eta-scale', dest='eta', default=0.87)\n",
+])
+def test_argparse_default_is_a_silent_fallback(src):
+    found = scan(src)
+    assert shape(found) == [("silent_fallback", "eta")]
+    assert found[0].value == 0.87
+
+
+def test_argparse_dashes_read_as_underscores():
+    src = "p.add_argument('--kla-scale', default=2.7)\n"
+    assert shape(scan(src, keys=("kla_scale",))) == [
+        ("silent_fallback", "kla_scale")]
+
+
+def test_argparse_dest_wins_over_the_option_string():
+    src = "p.add_argument('--eta', dest='other', default=0.87)\n"
+    assert scan(src) == []
+
+
+def test_argparse_without_a_literal_default_is_clean():
+    assert scan("p.add_argument('--eta', type=float, required=True)\n") == []
+    assert scan("p.add_argument('--eta', default=load_eta())\n") == []
+    assert scan("p.add_argument('--eta', default=argparse.SUPPRESS)\n") == []
+    assert scan("p.add_argument('--other', default=0.87)\n") == []
+
+
+def test_argparse_neutral_default_is_split_out():
+    src = "p.add_argument('--eta', default=1.0)\n"
+    assert scan(src) == []
+    assert len(scan(src, include_neutral=True)) == 1
+
+
+def test_argparse_default_on_a_non_method_call_is_clean():
+    assert scan("add_argument('--eta', default=0.87)\n") == []
