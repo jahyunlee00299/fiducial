@@ -203,8 +203,9 @@ one quantity `k_17`, `kcat_r6` or `Titer_gL`, and an exact name only finds the
 spelling you already knew. `--keys 'k_*,*titer*'` declares the family; patterns
 match case-insensitively, exact names stay exact. The number is looked for
 wherever a project keeps it: `eta = …`, `obj.eta = …`, `params["eta"] = …`,
-`{"eta": …}`, `dict(eta=…)`, and a signature default `def f(eta=…)`, which is
-the same silent fallback as `.get("eta", …)`. A keyword argument to any other
+`{"eta": …}`, `dict(eta=…)`, `setattr(obj, "eta", …)`, and a signature default
+`def f(eta=…)` or `getattr(obj, "eta", …)`, which are the same silent fallback
+as `.get("eta", …)`. A keyword argument to any other
 call names the callee's parameter, not yours: pymoo's `SBX(eta=15)` is a
 distribution index, and reading those by default took one codebase from 43
 findings to 217. `--call-keywords` (or `literals_call_keywords = true`) turns

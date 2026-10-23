@@ -125,3 +125,43 @@ def test_call_keywords_are_opt_in():
 
 def test_dict_call_is_always_the_projects_mapping():
     assert shape(scan("p = dict(eta=0.87)\n")) == [("bare_literal", "eta")]
+
+
+# --------------------------------------------------------------------------
+# getattr / setattr: the attribute-access spellings of .get and subscript
+# --------------------------------------------------------------------------
+
+def test_getattr_default_is_a_silent_fallback():
+    assert shape(scan("x = getattr(cfg, 'eta', 0.87)\n")) == [
+        ("silent_fallback", "eta")]
+
+
+def test_getattr_neutral_default_is_split_out():
+    src = "x = getattr(cfg, 'eta', 1.0)\n"
+    assert scan(src) == []
+    found = scan(src, include_neutral=True)
+    assert len(found) == 1 and found[0].neutral
+
+
+def test_getattr_without_default_or_with_a_name_is_clean():
+    assert scan("x = getattr(cfg, 'eta')\n") == []
+    assert scan("x = getattr(cfg, 'eta', fallback)\n") == []
+    assert scan("x = getattr(cfg, name, 0.87)\n") == []
+    assert scan("x = getattr(cfg, 'other', 0.87)\n") == []
+
+
+def test_setattr_literal_is_a_bare_literal():
+    assert shape(scan("setattr(cfg, 'eta', 0.87)\n")) == [
+        ("bare_literal", "eta")]
+
+
+def test_setattr_follows_the_unremarkable_rule():
+    # 0 and 1 are always exempt; 2 only when the key came from a pattern
+    assert scan("setattr(cfg, 'eta', 1)\n") == []
+    assert scan("setattr(cfg, 'k_17', 2)\n", keys=("k_*",)) == []
+    assert shape(scan("setattr(cfg, 'eta', 2)\n")) == [("bare_literal", "eta")]
+
+
+def test_setattr_on_a_name_or_a_method_named_getattr_is_clean():
+    assert scan("setattr(cfg, 'eta', measured)\n") == []
+    assert scan("obj.getattr(cfg, 'eta', 0.87)\n") == []

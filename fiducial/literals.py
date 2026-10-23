@@ -305,8 +305,35 @@ class _Visitor(ast.NodeVisitor):
                     neutral=default in self.neutral_defaults,
                     value=default,
                 )
+        self._attribute_access(node)
         self._keywords(node)
         self.generic_visit(node)
+
+    # getattr(cfg, "eta", 0.87) / setattr(cfg, "eta", 0.87)
+    def _attribute_access(self, node: ast.Call) -> None:
+        # `getattr` with a third argument is `.get` for objects: the same
+        # silent fallback, spelled for a config object instead of a dict.
+        # `setattr` writes the literal under a string key, which is the
+        # `params["eta"] = 0.87` shape without the subscript.
+        func = node.func
+        if not isinstance(func, ast.Name) or len(node.args) != 3:
+            return
+        if func.id not in {"getattr", "setattr"}:
+            return
+        key = _const_str(node.args[1])
+        val = _literal(node.args[2])
+        if not self.keys(key) or val is None:
+            return
+        if func.id == "getattr":
+            self._record(
+                node, key, "silent_fallback",
+                neutral=val in self.neutral_defaults, value=val,
+            )
+        elif not (
+            val in _ALWAYS_UNREMARKABLE
+            or (val in _UNREMARKABLE and not self.keys.named_exactly(key))
+        ):
+            self._record(node, key, "bare_literal", value=val)
 
     # eta = 1.0   /   self.eta = 1.0   /   eta: float = 1.0
     def visit_Assign(self, node: ast.Assign) -> None:
