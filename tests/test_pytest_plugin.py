@@ -131,6 +131,42 @@ def test_everything_ran_says_so(pytester):
     assert "gated ONLY by tests that did not run" not in out
 
 
+def test_ran_tmpdir_is_removed_at_exit(pytester, monkeypatch):
+    """The per-session directory of re-written 'ran' tests is registered for
+    removal at interpreter exit (it used to leak one /tmp/fiducial_ran_* per
+    session). It must still exist while the session runs: the gated pytest
+    call reads it after the method that wrote it has returned."""
+    import atexit
+    import shutil
+
+    calls = []
+    real = atexit.register
+
+    def spy(func, *args, **kwargs):
+        if func is shutil.rmtree:
+            calls.append(args)
+            return func
+        return real(func, *args, **kwargs)
+
+    monkeypatch.setattr(atexit, "register", spy)
+    _write_project(
+        pytester,
+        "def test_alpha():\n"
+        "    alpha = 1\n"
+        "    assert alpha == 1\n"
+        "def test_beta():\n"
+        "    beta = 2\n"
+        "    assert beta == 2\n",
+    )
+    pytester.runpytest_inprocess("--fiducial-spec", "params_spec.yaml")
+    assert calls, "no cleanup registered for the fiducial_ran_ directory"
+    path = calls[-1][0]
+    assert path.name.startswith("fiducial_ran_")
+    assert path.exists()            # still there: removal is deferred to exit
+    shutil.rmtree(path)             # what atexit would do
+    assert not path.exists()
+
+
 # --------------------------------------------------------------------------
 # strict mode
 # --------------------------------------------------------------------------
