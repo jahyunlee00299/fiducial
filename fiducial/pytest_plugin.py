@@ -242,6 +242,8 @@ class FiducialPlugin:
         re-introduce the same false gap inside the plugin.
         """
         import ast
+        import atexit
+        import shutil
         import tempfile
 
         if not self.ran:
@@ -253,6 +255,10 @@ class FiducialPlugin:
 
         written: list[Path] = []
         tmpdir = Path(tempfile.mkdtemp(prefix="fiducial_ran_"))
+        # The files are consumed by a pytest run that happens AFTER this method
+        # returns, so a try/finally here would delete them too early; remove the
+        # directory when the interpreter exits instead (it leaked one per session).
+        atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
         for path, names in by_file.items():
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
